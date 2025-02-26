@@ -4,32 +4,36 @@ import cv2
 import time
 import matplotlib.pyplot as plt
 import pickle
+import cProfile
+from scipy.cluster.hierarchy import linkage, fcluster
+from scipy.spatial.distance import pdist, squareform
 
 np.random.seed(0)
 _ham_tab = np.array([bin(i).count("1") for i in range(256)], dtype=np.uint8)
 
 
 def plot_matches(img1, img2, kp1, kp2, matches):
-    # 创建一个图形
-    fig, ax = plt.subplots(1, 1, figsize=(10, 5))
+    # # 创建一个图形
+    # fig, ax = plt.subplots(1, 1, figsize=(10, 5))
 
-    # 在img1和img2上绘制关键点和匹配线
-    ax.imshow(np.hstack((cv2.cvtColor(img1, cv2.COLOR_BGR2RGB), cv2.cvtColor(img2, cv2.COLOR_BGR2RGB))))
-    ax.set_title("Matches")
+    # # 在img1和img2上绘制关键点和匹配线
+    # ax.imshow(np.hstack((cv2.cvtColor(img1, cv2.COLOR_BGR2RGB), cv2.cvtColor(img2, cv2.COLOR_BGR2RGB))))
+    # ax.set_title("Matches")
 
-    for i, j in matches:
-        pt1 = kp1[i].pt
-        pt2 = kp2[j].pt
-        pt2 = (pt2[0] + img1.shape[1], pt2[1])  # 调整pt2的x坐标以匹配拼接图像
+    # for i, j in matches:
+    #     pt1 = kp1[i].pt
+    #     pt2 = kp2[j].pt
+    #     pt2 = (pt2[0] + img1.shape[1], pt2[1])  # 调整pt2的x坐标以匹配拼接图像
 
-        # 绘制关键点
-        ax.plot(pt1[0], pt1[1], "ro")
-        ax.plot(pt2[0], pt2[1], "ro")
+    #     # 绘制关键点
+    #     ax.plot(pt1[0], pt1[1], "ro")
+    #     ax.plot(pt2[0], pt2[1], "ro")
 
-        # 绘制匹配线
-        ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], "c")
+    #     # 绘制匹配线
+    #     ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], "c")
 
-    plt.show()
+    # plt.show()
+    return
 
 
 def HamDist(a, b):
@@ -39,24 +43,22 @@ def HamDist(a, b):
     return rlt
 
 
-def tree_search(kp1, kp2, cld1, cld2, Mh):
+def tree_search(kp1, kp2, Me11, Me22, Mh12):
     D = 8  # search depth
-    L = 8
-    K = 8
+    L = 16
+    K = 16
     matches = []
-    thresh_loss = 0.015  # if the average loss of adding `m` to matches is less than this, accept `m`. unit: meter
+    thresh_loss = 0.01  # if the average loss of adding `m` to matches is less than this, accept `m`. unit: meter
 
     def loss(m):
-        res = 0
-        for i, j in matches:
-            p1_1 = cld1[round(kp1[i].pt[1]), round(kp1[i].pt[0])]  # pair1 in img1
-            p1_2 = cld2[round(kp2[j].pt[1]), round(kp2[j].pt[0])]  # pair1 in img2
-            p2_1 = cld1[round(kp1[m[0]].pt[1]), round(kp1[m[0]].pt[0])]  # pair2 in img1
-            p2_2 = cld2[round(kp2[m[1]].pt[1]), round(kp2[m[1]].pt[0])]  # pair2 in img2
-            res += np.abs(np.linalg.norm(p1_1 - p2_1) - np.linalg.norm(p1_2 - p2_2))
+        if len(matches) == 0:
+            return 0
+        m0, m1 = m[:, 0], m[:, 1]
+        i, j = np.array(matches).T
+        res = np.sum(np.abs(Me11[m0[:, np.newaxis], i] - Me22[m1[:, np.newaxis], j]), axis=-1)
         return res
 
-    good = np.argwhere(Mh < 40)
+    good = np.argwhere(Mh12 < 40)
 
     for i, j in good:
         matches.append((i, j))
@@ -71,17 +73,19 @@ def tree_search(kp1, kp2, cld1, cld2, Mh):
             tmp = []
             # find top K closest keypoints in kp2
             for idx in indices:
-                dists = Mh[idx, :]
+                dists = Mh12[idx, :]
                 closest = np.argsort(dists)[:K]
                 tmp += [(idx, j) for j in closest]
             # find the best match
-            best = min(tmp, key=loss)
-            print(f"best loss: {loss(best) / len(matches): .3f}")
-            if loss(best) / len(matches) < thresh_loss:
+            tmp = np.array(tmp)
+            losses = loss(tmp)
+            best_idx = np.argmin(losses)
+            print(f"best loss: {losses[best_idx] / len(matches): .3f}")
+            if losses[best_idx] / len(matches) < thresh_loss:
                 # match point found
-                matches.append(best)
+                matches.append(tmp[best_idx])
                 plot_matches(img1, img2, kp1, kp2, matches)
-                d_sum += loss(best)
+                d_sum += losses[best_idx]
             else:
                 # no match point among these L points, maybe `start` is wrong
                 break
@@ -96,7 +100,7 @@ def tree_search(kp1, kp2, cld1, cld2, Mh):
     return [cv2.DMatch(i, j, 0) for i, j in matches]
 
 
-def GetHammingMat(des1, des2):
+def GetHamMat(des1, des2):
     """compute hamming distance matrix `Mh` between two descriptors
     Mh[i, j] == HamDist(des1[i], des2[j])
     """
@@ -117,25 +121,57 @@ def GetHammingMat(des1, des2):
     return Mh
 
 
+def cluster_keypoints(kp1, cld1, des1, th_e=0.01, th_h=20):
+    uv1 = np.array([kp.pt for kp in kp1], dtype=np.int32)
+    pts1 = cld1[uv1[:, 1], uv1[:, 0]]
+    Me11 = np.linalg.norm(pts1[:, np.newaxis, :] - pts1, axis=-1)
+    Mh11 = GetHamMat(des1, des1)
+    Z = linkage(squareform(Me11), method="single")
+    clusters = fcluster(Z, t=th_e, criterion="distance")
+    return clusters, Z
+
+
+def visualize_clusters(kp1, clusters, img):
+    cluster_ids = np.unique(clusters)
+    print(len(cluster_ids))
+    colors = plt.cm.get_cmap("tab20", len(cluster_ids))
+
+    plt.figure(figsize=(10, 10))
+    plt.imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    for cluster_id in cluster_ids:
+        cluster_points = [kp1[i].pt for i in range(len(kp1)) if clusters[i] == cluster_id]
+        cluster_points = np.array(cluster_points)
+        plt.scatter(cluster_points[:, 0], cluster_points[:, 1], color=colors(cluster_id), label=f"Cluster {cluster_id}")
+    plt.legend()
+    plt.show()
+
+
 def match_features(img1, img2, cld1, cld2, mask1=None, mask2=None):
     detector: cv2.ORB = cv2.ORB_create()
-    # detector.setMaxFeatures(500)
+    detector.setMaxFeatures(200)
+
     ## find the keypoints and descriptors with detector
+    # mask1 = np.zeros(img1.shape[:2], dtype=np.uint8)
+    # mask1[0:380, 150:500] = 255
     kp1, des1 = detector.detectAndCompute(img1, mask1)
     kp2, des2 = detector.detectAndCompute(img2, mask2)
     print(f"Number of keypoints in img1: {len(kp1)}, img2: {len(kp2)}")
 
+    # clusters, Z = cluster_keypoints(kp1, cld1, des1)
+    # visualize_clusters(kp1, clusters, img1)
+
+    Mh12 = GetHamMat(des1, des2)
+    uv1 = np.array([kp.pt for kp in kp1], dtype=np.int32)
+    uv2 = np.array([kp.pt for kp in kp2], dtype=np.int32)
+    pts1 = cld1[uv1[:, 1], uv1[:, 0]]
+    pts2 = cld2[uv2[:, 1], uv2[:, 0]]
+    Me11 = np.linalg.norm(pts1[:, np.newaxis, :] - pts1, axis=-1)
+    Me22 = np.linalg.norm(pts2[:, np.newaxis, :] - pts2, axis=-1)
+
     t0 = time.time()
-    Mh = GetHammingMat(des1, des2)
-    print(f"Time cost of searching good: {time.time() - t0:.3f}s")
-
-    matches = tree_search(kp1, kp2, cld1, cld2, Mh)
-
-    # img = cv2.drawMatches(img1, kp1, img2, kp2, matches, None, flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
-    # plt.figure()
-    # plt.imshow(img)
-    # plt.show()
-    # exit(0)
+    cProfile.runctx("matches = tree_search(kp1, kp2, Me11, Me22, Mh12)", globals(), locals(), "profile_data.prof")
+    print(f"Time: {time.time() - t0}")
+    exit(0)
 
     # draw the keypoints
     img1_with_keypoints = cv2.drawKeypoints(img1, kp1, None, color=(0, 255, 0))
@@ -162,7 +198,6 @@ if __name__ == "__main__":
     # img1 = cv2.resize(img1, (480, 640))
     # img2 = cv2.resize(img2, (480, 640))
 
-    imgs, clds, poses = pickle.load(open("carbinet_eval.pt", "rb"))
-    img1, img2, cld1, cld2 = imgs[3], imgs[0], clds[3], clds[0]
-
+    imgs, clds, poses = pickle.load(open("carbinet.pt", "rb"))
+    img1, img2, cld1, cld2 = imgs[1], imgs[0], clds[1], clds[0]
     match_features(img1, img2, cld1, cld2)
