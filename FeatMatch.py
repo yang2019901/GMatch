@@ -8,31 +8,22 @@ import cProfile
 from scipy.cluster.hierarchy import linkage, fcluster
 from scipy.spatial.distance import pdist, squareform
 
-np.random.seed(0)
+# np.random.seed(0)
 _ham_tab = np.array([bin(i).count("1") for i in range(256)], dtype=np.uint8)
 
 
 def plot_matches(img1, img2, kp1, kp2, matches):
-    # # 创建一个图形
-    # fig, ax = plt.subplots(1, 1, figsize=(10, 5))
-
-    # # 在img1和img2上绘制关键点和匹配线
-    # ax.imshow(np.hstack((cv2.cvtColor(img1, cv2.COLOR_BGR2RGB), cv2.cvtColor(img2, cv2.COLOR_BGR2RGB))))
-    # ax.set_title("Matches")
-
-    # for i, j in matches:
-    #     pt1 = kp1[i].pt
-    #     pt2 = kp2[j].pt
-    #     pt2 = (pt2[0] + img1.shape[1], pt2[1])  # 调整pt2的x坐标以匹配拼接图像
-
-    #     # 绘制关键点
-    #     ax.plot(pt1[0], pt1[1], "ro")
-    #     ax.plot(pt2[0], pt2[1], "ro")
-
-    #     # 绘制匹配线
-    #     ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], "c")
-
-    # plt.show()
+    _, ax = plt.subplots(1, 1, figsize=(10, 5))
+    ax.imshow(np.hstack((cv2.cvtColor(img1, cv2.COLOR_BGR2RGB), cv2.cvtColor(img2, cv2.COLOR_BGR2RGB))))
+    ax.set_title("Matches")
+    for i, j in matches:
+        pt1 = kp1[i].pt
+        pt2 = kp2[j].pt
+        pt2 = (pt2[0] + img1.shape[1], pt2[1])
+        ax.plot(pt1[0], pt1[1], "ro")
+        ax.plot(pt2[0], pt2[1], "ro")
+        ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], "c")
+    plt.show()
     return
 
 
@@ -44,6 +35,7 @@ def HamDist(a, b):
 
 
 def tree_search(kp1, kp2, Me11, Me22, Mh12):
+    m = 100  # number of start
     D = 8  # search depth
     L = 16
     K = 16
@@ -58,7 +50,8 @@ def tree_search(kp1, kp2, Me11, Me22, Mh12):
         res = np.sum(np.abs(Me11[m0[:, np.newaxis], i] - Me22[m1[:, np.newaxis], j]), axis=-1)
         return res
 
-    good = np.argwhere(Mh12 < 40)
+    part_indices = np.argpartition(np.reshape(Mh12, -1), m)[:m]
+    good = np.array(np.unravel_index(part_indices, Mh12.shape)).T
 
     for i, j in good:
         matches.append((i, j))
@@ -70,14 +63,12 @@ def tree_search(kp1, kp2, Me11, Me22, Mh12):
                 break
             # sample L indices from kp1
             indices = np.random.choice(len(kp1), min(L, len(kp1)), replace=False)
-            tmp = []
-            # find top K closest keypoints in kp2
-            for idx in indices:
-                dists = Mh12[idx, :]
-                closest = np.argsort(dists)[:K]
-                tmp += [(idx, j) for j in closest]
+            dists = Mh12[indices, :] # (L, n2)
+            closest_indices = np.argpartition(dists, K, axis=1)[:, :K] # (L, K)
+            indices = np.repeat(indices[:, np.newaxis], K, axis=1)
+            tmp = np.column_stack((indices.flatten(), closest_indices.flatten()))
+
             # find the best match
-            tmp = np.array(tmp)
             losses = loss(tmp)
             best_idx = np.argmin(losses)
             print(f"best loss: {losses[best_idx] / len(matches): .3f}")
@@ -199,5 +190,5 @@ if __name__ == "__main__":
     # img2 = cv2.resize(img2, (480, 640))
 
     imgs, clds, poses = pickle.load(open("carbinet.pt", "rb"))
-    img1, img2, cld1, cld2 = imgs[1], imgs[0], clds[1], clds[0]
+    img1, img2, cld1, cld2 = imgs[0], imgs[2], clds[0], clds[2]
     match_features(img1, img2, cld1, cld2)
