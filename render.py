@@ -2,6 +2,9 @@ import open3d as o3d
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+import struct
+import pickle
+from scipy.spatial.transform import Rotation
 
 
 def load_ply(path):
@@ -65,7 +68,7 @@ def load_ply(path):
                 for i in range(face_n_corners * 2):
                     face_props.append(("texcoord_ind_" + str(i), elems[3]))
             else:
-                misc.log("Warning: Not supported face property: " + elems[-1])
+                print("Warning: Not supported face property: " + elems[-1])
         elif line.startswith("format"):
             if "binary" in line:
                 is_binary = True
@@ -199,31 +202,123 @@ def load_ply(path):
     return model
 
 
-model_path = r"/home/yang2019901/GMatch-ORB/bop_data/ycbv/models/"
-model_name = r"obj_000001.ply"
+def get_snapshots(mesh):
+    """ snapshots: [(rgb, cld, M_ex), ...]
+    rgb: (H, W, 3), 0~1
+    cld: (H, W, 3), meters
+    M_ex: (4, 4)
+    """
+    vis = o3d.visualization.Visualizer()
+    vis.create_window(visible=False, width=640, height=480)
+    vis.add_geometry(mesh)
 
-def fuck(model_name):
-    model = load_ply(os.path.join(model_path, model_name))
-    mesh = o3d.geometry.TriangleMesh()
-    mesh.vertices = o3d.utility.Vector3dVector(model["pts"])
-    mesh.triangles = o3d.utility.Vector3iVector(model["faces"])
-    if "texture_file" in model:
-        model_texture_path = os.path.join(
-            os.path.dirname(model_path), model["texture_file"]
-        )
-        model_texture = o3d.io.read_image(model_texture_path)
-        mesh.textures = [o3d.geometry.Image(model_texture)]
-        faces = np.asarray(model["faces"]).flatten()
-        uvs = model["texture_uv"][faces]
-        ## Note that uv axis in bop's ply file is different from that in open3d
-        ## ply-uv axis: right-up, origin at left-bottom
-        ## open3d-uv axis: right-down, origin at left-top
-        uvs[:, 1] = 1 - uvs[:, 1]
-        mesh.triangle_uvs = o3d.utility.Vector2dVector(uvs)
-        mesh.triangle_material_ids = o3d.utility.IntVector([0] * len(faces))
-    else:
-        model_texture = None
-    o3d.visualization.draw_geometries([mesh])
+    # 设置相机参数
+    camera_params = [
+        {"front": [1, 0, 0], "lookat": [0, 0, 0], "up": [0, 0, 1]},  # x+
+        {"front": [-1, 0, 0], "lookat": [0, 0, 0], "up": [0, 0, 1]},  # x-
+        {"front": [0, 1, 0], "lookat": [0, 0, 0], "up": [0, 0, 1]},  # y+
+        {"front": [0, -1, 0], "lookat": [0, 0, 0], "up": [0, 0, 1]},  # y-
+        {"front": [0, 0, 1], "lookat": [0, 0, 0], "up": [0, 1, 0]},  # z+
+        {"front": [0, 0, -1], "lookat": [0, 0, 0], "up": [0, 1, 0]},  # z-
+    ]
 
-for i in range(1, 22):
-    fuck(f"obj_{i:06d}.ply")
+    snapshots = []
+
+    for params in camera_params:
+        ctr = vis.get_view_control()
+        ctr.set_lookat(params["lookat"])
+        ctr.set_front(params["front"])
+        ctr.set_up(params["up"])
+        vis.poll_events()
+        vis.update_renderer()
+
+        # Capture depth and color images
+        _depth = vis.capture_depth_float_buffer(True)
+        _rgb = vis.capture_screen_float_buffer(True)
+
+        # Convert to Open3D RGBD image
+        depth = np.asarray(_depth)  # (H, W)
+        rgb = np.asarray(_rgb)  # (H, W, 3)
+        cam_info = ctr.convert_to_pinhole_camera_parameters()
+        M_ex, M_in = cam_info.extrinsic, cam_info.intrinsic.intrinsic_matrix
+        # Convert depth to point cloud
+        H, W = depth.shape
+        depth = depth.reshape(-1)
+        u, v = np.meshgrid(np.arange(W), np.arange(H))
+        u, v = u.reshape(-1), v.reshape(-1)
+        z = depth
+        x = (u - M_in[0, 2]) * z / M_in[0, 0]
+        y = (v - M_in[1, 2]) * z / M_in[1, 1]
+        cld = np.stack([x, y, z], axis=1).reshape(H, W, 3)
+        snapshots.append((rgb, cld, np.linalg.inv(M_ex)))
+
+    vis.destroy_window()
+    return snapshots
+
+
+def pose2Mat(pose):
+    """pose: [[x, y, z], [qx, qy, qz, qw]]"""
+    M = np.eye(4)
+    M[:3, 3] = pose[0]
+    M[:3, :3] = Rotation.from_quat(pose[1]).as_matrix()
+    return M
+
+
+def Mat2pose(M):
+    """pose: [[x, y, z], [qx, qy, qz, qw]]"""
+    return [M[:3, 3], Rotation.from_matrix(M[:3, :3]).as_quat()]
+
+
+def save_snapshots(snapshots, path):
+    """ imgs: (N, H, W, 3), 0~255, uint8
+        clds: (N, H, W, 3), meters, float32
+        poses: [(pos, quat), ...]
+    """
+    rgbs, clds, M_ex_list = zip(*snapshots)
+    imgs = np.asarray(np.stack(rgbs) * 255, dtype=np.uint8) 
+    clds = np.asarray(np.stack(clds), dtype=np.float32)
+    poses = [Mat2pose(M_ex) for M_ex in M_ex_list]
+    with open(path, "wb") as f:
+        pickle.dump((imgs, clds, poses), f)
+
+
+def vis_snapshots(snapshots):
+    clds = []
+    for rgb, cld, M_pose in snapshots:
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(cld.reshape(-1, 3))
+        pcd.colors = o3d.utility.Vector3dVector(rgb.reshape(-1, 3))
+        pcd.transform(M_pose)
+        clds.append(pcd)
+    axis_mesh = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
+    clds.append(axis_mesh)
+    o3d.visualization.draw_geometries(clds)
+
+
+# 加载模型
+model_path = r"/home/yang2019901/GMatch-ORB/bop_data/ycbv/models/obj_000001.ply"
+model = load_ply(model_path)
+mesh = o3d.geometry.TriangleMesh()
+mesh.vertices = o3d.utility.Vector3dVector(model["pts"] * 0.001)
+mesh.triangles = o3d.utility.Vector3iVector(model["faces"])
+if "texture_file" in model:
+    model_texture_path = os.path.join(os.path.dirname(model_path), model["texture_file"])
+    model_texture = o3d.io.read_image(model_texture_path)
+    mesh.textures = [o3d.geometry.Image(model_texture)]
+    faces = np.asarray(model["faces"]).flatten()
+    uvs = model["texture_uv"][faces]
+    uvs[:, 1] = 1 - uvs[:, 1]
+    mesh.triangle_uvs = o3d.utility.Vector2dVector(uvs)
+    mesh.triangle_material_ids = o3d.utility.IntVector([0] * len(faces))
+
+# calc diameter of the model
+bbox = np.max(model["pts"], axis=0) - np.min(model["pts"], axis=0)
+print("bbox: ", bbox)
+
+# # 显示模型
+# o3d.visualization.draw_geometries([mesh])
+
+# 拍摄 RGBD 图像
+snapshots = get_snapshots(mesh)
+# vis_snapshots(snapshots)
+save_snapshots(snapshots, "jar.pt")
