@@ -296,7 +296,7 @@ def vis_snapshots(snapshots):
 
 
 # 加载模型
-model_path = r"/home/yang2019901/GMatch-ORB/bop_data/ycbv/models/obj_000001.ply"
+model_path = r"/home/yang2019901/GMatch-ORB/bop_data/ycbv/models/obj_000015.ply"
 model = load_ply(model_path)
 mesh = o3d.geometry.TriangleMesh()
 mesh.vertices = o3d.utility.Vector3dVector(model["pts"] * 0.001)

@@ -4,7 +4,7 @@ import cv2
 import time
 import matplotlib.pyplot as plt
 from matplotlib import patches
-import open3d as o3d
+from util import transform, depth2cld
 import pickle
 import cProfile
 from scipy.spatial.transform import Rotation
@@ -15,35 +15,18 @@ np.random.seed(0)
 _ham_tab = np.array([bin(i).count("1") for i in range(256)], dtype=np.uint8)
 
 
-def plot_matches(img1, img2, kp1, kp2, matches):
+def plot_matches(img1, img2, uv1, uv2):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
     ax1.imshow(img1)
     ax2.imshow(img2)
-    for i, j in matches:
-        pt1 = kp1[i].pt
-        pt2 = kp2[j].pt
-        pt2 = (pt2[0] + img1.shape[1], pt2[1])
-        l = patches.ConnectionPatch(xyA=pt1, xyB=pt2, axesA=ax1, axesB=ax2)
+    for pt1, pt2 in zip(uv1, uv2):
+        l = patches.ConnectionPatch(xyA=pt1, xyB=pt2, axesA=ax1, axesB=ax2, coordsA="data", coordsB="data", color="red")
         fig.add_artist(l)
     mngr = plt.get_current_fig_manager()
     mngr.window.wm_geometry("+380+310")
     fig.tight_layout()
     plt.show()
     return
-
-
-def plot_matches_3d(pcd1, pcd2, m_pts1, m_pts2):
-    # 创建一个新的 LineSet 对象
-    L = len(m_pts1)
-    lines = [(i, i + L) for i in range(L)]
-    colors = [(1, 0, 0) for _ in range(L)]
-    line_set = o3d.geometry.LineSet()
-    line_set.points = o3d.utility.Vector3dVector(np.vstack((m_pts1, m_pts2)))
-    line_set.lines = o3d.utility.Vector2iVector(lines)
-    line_set.colors = o3d.utility.Vector3dVector(colors)
-    # 可视化点云和连线
-    axes = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
-    o3d.visualization.draw_geometries([pcd1, pcd2, line_set, axes])
 
 
 def HamDist(a, b):
@@ -60,7 +43,7 @@ def tree_search(Me11, Me22, Mh12):
     K2 = 16
     L1, L2 = Mh12.shape
     matches = []
-    thresh_loss = 0.05  # if the average loss of adding `m` to matches is less than this, accept `m`
+    thresh_loss = 0.2  # if the average loss of adding `m` to matches is less than this, accept `m`
 
     def loss(m):
         if len(matches) == 0:
@@ -159,66 +142,65 @@ def visualize_clusters(kp1, clusters, img):
     plt.show()
 
 
-def get_pcd(pts, color=None):
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(pts.reshape(-1, 3))
-    if color is not None:
-        c = np.asarray(color, dtype=np.float32) / 255 if color.dtype==np.uint8 else color
-        pcd.colors = o3d.utility.Vector3dVector(c.reshape(-1, 3))
-    return pcd
-
-
 def match_features(imgs_src, clds_src, img_dst, cld_dst):
+    """imgs_src, clds_src: (N, H, W, 3)
+    img_dst, cld_dst: (H, W, 3), (H, W, 3)
+    """
     detector: cv2.ORB = cv2.ORB_create()
     detector.setMaxFeatures(100)
 
+    uv_ex = []
     ## find the keypoints and descriptors with detector
     pts_src, des_src = [], []
-    for img_src, cld_src in zip(imgs_src, clds_src):
+    for i, (img_src, cld_src) in enumerate(zip(imgs_src, clds_src)):
         kp, des = detector.detectAndCompute(img_src, None)
-        uv = np.array([kp[i].pt for i in range(len(kp))], dtype=np.int32)
-        if len(uv) == 0:
+        if len(kp) == 0:
             continue
+        uv = np.array([k.pt for k in kp], dtype=np.int32)
+        uv_ex.extend([(i, u[0], u[1]) for u in uv])
         pts_src.append(cld_src[uv[:, 1], uv[:, 0]])
         des_src.append(des)
     pts_src = np.concatenate(pts_src, axis=0)  # (n1, 3), source points
     des_src = np.concatenate(des_src, axis=0)  # (n1, 32), source descriptors
 
-    detector.setMaxFeatures(200)
+    detector.setMaxFeatures(500)
     kp, des_dst = detector.detectAndCompute(img_dst, None)
     uv = np.array([kp[i].pt for i in range(len(kp))], dtype=np.int32)
     pts_dst = cld_dst[uv[:, 1], uv[:, 0]]
     print(f"Number of keypoints: src: {len(pts_src)}, img2: {len(pts_dst)}")
+    # plt.imshow(cv2.drawKeypoints(img_dst, kp, None))
+    # plt.show()
 
     Mh12 = GetHamMat(des_src, des_dst)
     Me11 = np.linalg.norm(pts_src[:, np.newaxis, :] - pts_src, axis=-1)
     Me22 = np.linalg.norm(pts_dst[:, np.newaxis, :] - pts_dst, axis=-1)
 
     matches = tree_search(Me11, Me22, Mh12)
-    pcd1 = get_pcd(clds_src.reshape(-1, 3), imgs_src.reshape(-1, 3))
-    pcd2 = get_pcd(cld_dst.reshape(-1, 3), img_dst.reshape(-1, 3))
-    plot_matches_3d(pcd1, pcd2, pts_src[matches[:, 0]], pts_dst[matches[:, 1]])
-
-
-def pose2Mat(pose):
-    """pose: [[x, y, z], [qx, qy, qz, qw]]"""
-    M = np.eye(4)
-    M[:3, 3] = pose[0]
-    M[:3, :3] = Rotation.from_quat(pose[1]).as_matrix()
-    return M
-
-
-def transform_clds(clds, poses):
-    clds_transformed = []
-    for cld, pose in zip(clds, poses):
-        M = pose2Mat(pose)
-        cld_transformed = cld @ M[:3, :3].T + M[:3, 3]
-        clds_transformed.append(cld_transformed)
-    return np.array(clds_transformed)
+    ## parse matches
+    dic = {}
+    for i, j in matches:
+        idx_img = uv_ex[i][0]
+        if idx_img not in dic:
+            dic[idx_img] = []
+        dic[idx_img].append((uv_ex[i][1:], uv[j]))
+    for idx_img, matches in dic.items():
+        img_src = imgs_src[idx_img]
+        cld_src = clds_src[idx_img]
+        plot_matches(img_src, img_dst, *zip(*matches))
 
 
 if __name__ == "__main__":
     imgs, clds, poses = pickle.load(open("jar.pt", "rb"))
-    clds = transform_clds(clds, poses)
-    img1, cld1 = imgs[0], clds[0] + 0.1
-    match_features(imgs, clds, img1, cld1)
+    for i, cld in enumerate(clds):
+        clds[i] = transform(cld, poses[i])
+
+    img1, cld1 = imgs[2], clds[2]
+
+    img2 = cv2.imread("bop_data/ycbv/test/000050/rgb/000001.png", cv2.IMREAD_COLOR_RGB)
+    depth2 = cv2.imread("bop_data/ycbv/test/000050/depth/000001.png", cv2.IMREAD_UNCHANGED)
+    mask2 = cv2.imread("bop_data/ycbv/test/000050/mask/000001_000000.png", cv2.IMREAD_UNCHANGED)
+
+    intrin = np.array([1066.778, 0.0, 312.9869, 0.0, 1067.487, 241.3109, 0.0, 0.0, 1.0]).reshape(3, 3)
+    cld2 = depth2cld(depth2 * 0.0001, intrin)
+
+    match_features(img1, img2, cld1, cld2, mask2=mask2)
