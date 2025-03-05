@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.spatial.transform import Rotation
+import open3d as o3d
 
 
 def pose2mat(pose):
@@ -16,10 +17,11 @@ def mat2pose(M):
 
 
 def transform(pts, pose):
-    """ pts: (..., 3), pose: [[x, y, z], [qx, qy, qz, qw]], return: (..., 3)"""
+    """pts: (..., 3), pose: [[x, y, z], [qx, qy, qz, qw]], return: (..., 3)"""
     _pts = np.array(pts)
     M = pose2mat(pose)
-    return (_pts @ M[:3, :3].T + M[:3, 3])
+    return _pts @ M[:3, :3].T + M[:3, 3]
+
 
 def depth2cld(depth, intrisic):
     intrin = np.array(intrisic).reshape(3, 3)
@@ -28,3 +30,15 @@ def depth2cld(depth, intrisic):
     uv = np.stack((u, v, np.ones_like(u)), axis=-1)
     pts = np.linalg.inv(intrin) @ uv.reshape(-1, 3).T * z.reshape(-1)
     return pts.T.reshape(z.shape[0], z.shape[1], 3)
+
+
+def vis_cld(clds, colors=None, poses=None):
+    if poses is not None:
+        _clds = np.array([transform(cld, pose) for cld, pose in zip(clds, poses)])
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(_clds.reshape(-1, 3))
+    if colors is not None:
+        _colors = np.array(colors).reshape(-1, 3) / 255.0
+        pcd.colors = o3d.utility.Vector3dVector(_colors)
+    axis = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
+    o3d.visualization.draw_geometries([pcd, axis])

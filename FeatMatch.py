@@ -4,12 +4,13 @@ import cv2
 import time
 import matplotlib.pyplot as plt
 from matplotlib import patches
-from util import transform, depth2cld
 import pickle
 import cProfile
 from scipy.spatial.transform import Rotation
 from scipy.cluster.hierarchy import linkage, fcluster
 from scipy.spatial.distance import squareform
+
+import util
 
 np.random.seed(0)
 _ham_tab = np.array([bin(i).count("1") for i in range(256)], dtype=np.uint8)
@@ -39,11 +40,11 @@ def HamDist(a, b):
 def tree_search(Me11, Me22, Mh12):
     m = 100  # number of start
     D = 8  # search depth
-    K1 = 16
-    K2 = 16
+    K = 32
+    thresh_ham = 80
+    thresh_loss = 0.1  # if the average loss of adding `m` to matches is less than this, accept `m`
     L1, L2 = Mh12.shape
     matches = []
-    thresh_loss = 0.2  # if the average loss of adding `m` to matches is less than this, accept `m`
 
     def loss(m):
         if len(matches) == 0:
@@ -66,12 +67,14 @@ def tree_search(Me11, Me22, Mh12):
         while True:
             if len(matches) == D:
                 break
-            # sample L indices from kp1
-            indices = np.random.choice(L1, min(K1, L1), replace=False)
-            dists = Mh12[indices, :]  # (K1, L2)
-            closest_indices = np.argpartition(dists, K2, axis=1)[:, :K2]  # (K1, K2)
-            indices = np.repeat(indices[:, np.newaxis], K2, axis=1)  # (K1*K2, )
-            tmp = np.column_stack((indices.flatten(), closest_indices.flatten()))  # (K1*K2, 2)
+            # sample K indices from kp1
+            indices = np.random.choice(L1, min(K, L1), replace=False)
+            # find all the points in kp2 that has Mh12 < thresh_ham
+            dists = Mh12[indices, :]  # (K, L2)
+            closest_indices = np.argwhere(dists < thresh_ham)
+            if len(closest_indices) == 0:
+                break
+            tmp = np.column_stack((indices[closest_indices[:, 0]], closest_indices[:, 1]))
 
             # find the best match
             losses = loss(tmp)
@@ -117,37 +120,12 @@ def GetHamMat(des1, des2):
     return Mh
 
 
-def cluster_keypoints(kp1, cld1, des1, th_e=0.01, th_h=20):
-    uv1 = np.array([kp.pt for kp in kp1], dtype=np.int32)
-    pts1 = cld1[uv1[:, 1], uv1[:, 0]]
-    Me11 = np.linalg.norm(pts1[:, np.newaxis, :] - pts1, axis=-1)
-    Mh11 = GetHamMat(des1, des1)
-    Z = linkage(squareform(Me11), method="single")
-    clusters = fcluster(Z, t=th_e, criterion="distance")
-    return clusters, Z
-
-
-def visualize_clusters(kp1, clusters, img):
-    cluster_ids = np.unique(clusters)
-    print(len(cluster_ids))
-    colors = plt.cm.get_cmap("tab20", len(cluster_ids))
-
-    plt.figure(figsize=(10, 10))
-    plt.imshow(img)
-    for cluster_id in cluster_ids:
-        cluster_points = [kp1[i].pt for i in range(len(kp1)) if clusters[i] == cluster_id]
-        cluster_points = np.array(cluster_points)
-        plt.scatter(cluster_points[:, 0], cluster_points[:, 1], color=colors(cluster_id), label=f"Cluster {cluster_id}")
-    plt.legend()
-    plt.show()
-
-
 def match_features(imgs_src, clds_src, img_dst, cld_dst):
     """imgs_src, clds_src: (N, H, W, 3)
     img_dst, cld_dst: (H, W, 3), (H, W, 3)
     """
     detector: cv2.ORB = cv2.ORB_create()
-    detector.setMaxFeatures(100)
+    detector.setMaxFeatures(200)
 
     uv_ex = []
     ## find the keypoints and descriptors with detector
@@ -163,13 +141,13 @@ def match_features(imgs_src, clds_src, img_dst, cld_dst):
     pts_src = np.concatenate(pts_src, axis=0)  # (n1, 3), source points
     des_src = np.concatenate(des_src, axis=0)  # (n1, 32), source descriptors
 
-    detector.setMaxFeatures(500)
+    detector.setMaxFeatures(400)
     kp, des_dst = detector.detectAndCompute(img_dst, None)
     uv = np.array([kp[i].pt for i in range(len(kp))], dtype=np.int32)
     pts_dst = cld_dst[uv[:, 1], uv[:, 0]]
     print(f"Number of keypoints: src: {len(pts_src)}, img2: {len(pts_dst)}")
-    # plt.imshow(cv2.drawKeypoints(img_dst, kp, None))
-    # plt.show()
+    plt.imshow(cv2.drawKeypoints(img_dst, kp, None))
+    plt.show()
 
     Mh12 = GetHamMat(des_src, des_dst)
     Me11 = np.linalg.norm(pts_src[:, np.newaxis, :] - pts_src, axis=-1)
@@ -190,17 +168,10 @@ def match_features(imgs_src, clds_src, img_dst, cld_dst):
 
 
 if __name__ == "__main__":
-    imgs, clds, poses = pickle.load(open("jar.pt", "rb"))
-    for i, cld in enumerate(clds):
-        clds[i] = transform(cld, poses[i])
-
-    img1, cld1 = imgs[2], clds[2]
-
-    img2 = cv2.imread("bop_data/ycbv/test/000050/rgb/000001.png", cv2.IMREAD_COLOR_RGB)
-    depth2 = cv2.imread("bop_data/ycbv/test/000050/depth/000001.png", cv2.IMREAD_UNCHANGED)
-    mask2 = cv2.imread("bop_data/ycbv/test/000050/mask/000001_000000.png", cv2.IMREAD_UNCHANGED)
-
-    intrin = np.array([1066.778, 0.0, 312.9869, 0.0, 1067.487, 241.3109, 0.0, 0.0, 1.0]).reshape(3, 3)
-    cld2 = depth2cld(depth2 * 0.0001, intrin)
-
-    match_features(img1, img2, cld1, cld2, mask2=mask2)
+    imgs_src, clds_src, poses_src = pickle.load(open("box.pt", "rb"))
+    imgs_dst, clds_dst, poses_dst = pickle.load(open("box_eval.pt", "rb"))
+    for i in range(len(imgs_src)):
+        imgs_src[i] = cv2.medianBlur(imgs_src[i], 7)
+    img_dst, cld_dst = imgs_dst[0], clds_dst[0]
+    img_dst = cv2.medianBlur(img_dst, 7)
+    match_features(imgs_src, clds_src, img_dst, cld_dst)
