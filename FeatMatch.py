@@ -6,9 +6,6 @@ import matplotlib.pyplot as plt
 from matplotlib import patches
 import pickle
 import cProfile
-from scipy.spatial.transform import Rotation
-from scipy.cluster.hierarchy import linkage, fcluster
-from scipy.spatial.distance import squareform
 
 import util
 
@@ -38,37 +35,37 @@ def HamDist(a, b):
 
 
 def tree_search(Me11, Me22, Mh12):
-    m = 100  # number of start
-    D = 8  # search depth
+    N_good = 100  # number of good matches
+    D = 16  # search depth
     K = 32
-    thresh_ham = 80
+    thresh_ham = 100
     thresh_loss = 0.1  # if the average loss of adding `m` to matches is less than this, accept `m`
-    L1, L2 = Mh12.shape
+    n1, n2 = Mh12.shape
     matches = []
 
     def loss(m):
+        """m: (n, 2), matches: (d, 2)"""
         if len(matches) == 0:
             return 0
-        m0, m1 = m[:, 0], m[:, 1]  # (Li, )
-        i, j = np.array(matches).T  # (Di, )
-        d1 = Me11[m0[:, np.newaxis], i]
-        d2 = Me22[m1[:, np.newaxis], j]
-        err = np.divide(np.abs(d1 - d2), d1, out=np.ones_like(d1), where=d1 != 0)  # (Li, Di), error rate
-        res = np.sum(err, axis=-1)  # (Li, )
+        m0, m1 = m[:, 0], m[:, 1]  # (n, )
+        i, j = np.array(matches).T  # (d, )
+        dist1 = Me11[m0[:, np.newaxis], i]
+        dist2 = Me22[m1[:, np.newaxis], j]
+        err = np.divide(np.abs(dist1 - dist2), dist1, out=np.ones_like(dist1), where=dist1 != 0)  # (n, d), error rate
+        res = np.max(err, axis=-1)  # (n, )
         return res
 
-    part_indices = np.argpartition(np.reshape(Mh12, -1), m)[:m]
+    part_indices = np.argpartition(np.reshape(Mh12, -1), N_good)[:N_good]
     good = np.array(np.unravel_index(part_indices, Mh12.shape)).T
 
     for i, j in good:
         matches.append((i, j))
-        d_sum = 0
         # search for the next match
         while True:
             if len(matches) == D:
                 break
             # sample K indices from kp1
-            indices = np.random.choice(L1, min(K, L1), replace=False)
+            indices = np.random.choice(n1, min(K, n1), replace=False)
             # find all the points in kp2 that has Mh12 < thresh_ham
             dists = Mh12[indices, :]  # (K, L2)
             closest_indices = np.argwhere(dists < thresh_ham)
@@ -79,11 +76,10 @@ def tree_search(Me11, Me22, Mh12):
             # find the best match
             losses = loss(tmp)
             best_idx = np.argmin(losses)
-            print(f"best loss: {losses[best_idx] / len(matches): .3f}")
-            if losses[best_idx] / len(matches) < thresh_loss:
+            print(f"best loss: {losses[best_idx]:.3f}")
+            if losses[best_idx] < thresh_loss:
                 # match point found
                 matches.append(tmp[best_idx])
-                d_sum += losses[best_idx]
             else:
                 # no match point among these L points, maybe `start` is wrong
                 break
@@ -95,7 +91,6 @@ def tree_search(Me11, Me22, Mh12):
 
     if len(matches) < D:
         print("Not enough matches found")
-    print(f"Average loss: {d_sum * 2 / (D * (D - 1)):.3f}")
     return np.array(matches)
 
 
@@ -120,12 +115,12 @@ def GetHamMat(des1, des2):
     return Mh
 
 
-def match_features(imgs_src, clds_src, img_dst, cld_dst):
+def match_features(imgs_src, clds_src, img_dst, cld_dst, mask2=None):
     """imgs_src, clds_src: (N, H, W, 3)
     img_dst, cld_dst: (H, W, 3), (H, W, 3)
     """
     detector: cv2.ORB = cv2.ORB_create()
-    detector.setMaxFeatures(200)
+    detector.setMaxFeatures(300)
 
     uv_ex = []
     ## find the keypoints and descriptors with detector
@@ -138,14 +133,20 @@ def match_features(imgs_src, clds_src, img_dst, cld_dst):
         uv_ex.extend([(i, u[0], u[1]) for u in uv])
         pts_src.append(cld_src[uv[:, 1], uv[:, 0]])
         des_src.append(des)
+        plt.figure()
+        plt.imshow(cv2.drawKeypoints(img_src, kp, None))
     pts_src = np.concatenate(pts_src, axis=0)  # (n1, 3), source points
     des_src = np.concatenate(des_src, axis=0)  # (n1, 32), source descriptors
 
-    detector.setMaxFeatures(400)
-    kp, des_dst = detector.detectAndCompute(img_dst, None)
+    detector.setMaxFeatures(500)
+    kp, des_dst = detector.detectAndCompute(img_dst, mask2)
+    if len(kp) == 0:
+        print("No keypoints found in img2")
+        return
     uv = np.array([kp[i].pt for i in range(len(kp))], dtype=np.int32)
     pts_dst = cld_dst[uv[:, 1], uv[:, 0]]
     print(f"Number of keypoints: src: {len(pts_src)}, img2: {len(pts_dst)}")
+    plt.figure()
     plt.imshow(cv2.drawKeypoints(img_dst, kp, None))
     plt.show()
 
@@ -168,10 +169,19 @@ def match_features(imgs_src, clds_src, img_dst, cld_dst):
 
 
 if __name__ == "__main__":
-    imgs_src, clds_src, poses_src = pickle.load(open("box.pt", "rb"))
-    imgs_dst, clds_dst, poses_dst = pickle.load(open("box_eval.pt", "rb"))
-    for i in range(len(imgs_src)):
-        imgs_src[i] = cv2.medianBlur(imgs_src[i], 7)
-    img_dst, cld_dst = imgs_dst[0], clds_dst[0]
-    img_dst = cv2.medianBlur(img_dst, 7)
-    match_features(imgs_src, clds_src, img_dst, cld_dst)
+    """load model images"""
+    imgs_src, clds_src, poses_src = pickle.load(open("cookies.pt", "rb"))
+    for i, cld in enumerate(clds_src):
+        clds_src[i] = util.transform(cld, poses_src[i])
+
+    """ load scene image """
+    img_dst = cv2.imread("bop_data/hope/val/000002/rgb/000000.png", cv2.IMREAD_COLOR_RGB)
+    depth2 = cv2.imread("bop_data/hope/val/000002/depth/000000.png", cv2.IMREAD_UNCHANGED)
+    mask2 = cv2.imread("bop_data/hope/val/000002/mask/000000_000008.png", cv2.IMREAD_UNCHANGED)
+    cld_dst = util.depth2cld(depth2 * 0.001, [1390.53, 0.0, 964.957, 0.0, 1386.99, 522.586, 0.0, 0.0, 1.0])
+    # img_dst = cv2.medianBlur(img_dst, 5)
+    # imgs_dst, clds_dst, poses_dst = pickle.load(open("carbinet_eval2.pt", "rb"))
+    # img_dst, cld_dst = imgs_dst[1], clds_dst[1]
+    # mask2 = np.zeros(img_dst.shape[:2], dtype=np.uint8)
+    # mask2[80:270, 220:390] = 255
+    match_features(imgs_src, clds_src, img_dst, cld_dst, mask2)

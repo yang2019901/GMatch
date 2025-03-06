@@ -35,6 +35,8 @@ def depth2cld(depth, intrisic):
 def vis_cld(clds, colors=None, poses=None):
     if poses is not None:
         _clds = np.array([transform(cld, pose) for cld, pose in zip(clds, poses)])
+    else:
+        _clds = np.array(clds)
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(_clds.reshape(-1, 3))
     if colors is not None:
