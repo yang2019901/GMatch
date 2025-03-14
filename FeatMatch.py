@@ -81,6 +81,8 @@ def tree_search(pts1, pts2, Mh12):
 
     for i, j in good:
         matches.append((i, j))
+        global img_dst, img_src, uv_dst, uv_src
+        # plot_matches(img_src, img_dst, uv_src[np.array(matches)[:, 0]], uv_dst[np.array(matches)[:, 1]])
         ## search for the next match
         while True:
             if len(matches) == D:
@@ -92,10 +94,10 @@ def tree_search(pts1, pts2, Mh12):
             pairs = np.argwhere(dists < thresh_ham)
             if len(pairs) == 0:
                 break
-            matches_alt = np.column_stack((pts1_ind[pairs[:, 0]], pairs[:, 1])) # (n, 2)
+            matches_alt = np.column_stack((pts1_ind[pairs[:, 0]], pairs[:, 1]))  # (n, 2)
 
             ## filter with distance loss
-            losses = loss(matches_alt) # (n, )
+            losses = loss(matches_alt)  # (n, )
             ind = np.argwhere(losses < thresh_loss).flatten()
             matches_alt = matches_alt[ind]
             losses = losses[ind]
@@ -104,10 +106,11 @@ def tree_search(pts1, pts2, Mh12):
             ## filter out the matches that will flip the normal
             flags = flipover(matches_alt)
             matches_alt = matches_alt[~flags]
+            losses = losses[~flags]
             if len(matches_alt) == 0:
                 break
             ## get the best match
-            best = np.argmin(losses[~flags])
+            best = np.argmin(losses)
             matches.append(tuple(matches_alt[best]))
 
         if len(matches) == D:
@@ -142,28 +145,36 @@ def GetHamMat(des1, des2):
     return Mh
 
 
-def match_features(imgs_src, clds_src, img_dst, cld_dst, mask2=None):
+def match_features(imgs_src, img_dst, clds_src, cld_dst, masks_src=None, mask_dst=None):
     """imgs_src, clds_src: (N, H, W, 3)
     img_dst, cld_dst: (H, W, 3), (H, W, 3)
     """
     detector: cv2.ORB = cv2.ORB_create()
 
     detector.setMaxFeatures(500)
-    kp_dst, des_dst = detector.detectAndCompute(img_dst, mask2)
+    kp_dst, des_dst = detector.detectAndCompute(img_dst, mask_dst)
     if len(kp_dst) == 0:
         print("No keypoints found in img2")
         return
     uv_dst = np.array([k.pt for k in kp_dst], dtype=np.int32)
     pts_dst = cld_dst[uv_dst[:, 1], uv_dst[:, 0]]
 
+    globals()["uv_dst"] = uv_dst
+    globals()["img_dst"] = img_dst
+
     ## find the keypoints and descriptors with detector
     detector.setMaxFeatures(600)
-    for _, (img_src, cld_src) in enumerate(zip(imgs_src, clds_src)):
-        kp_src, des_src = detector.detectAndCompute(img_src, None)
+    if masks_src is None:
+        masks_src = [None] * len(imgs_src)
+    for _, (img_src, cld_src, mask_src) in enumerate(zip(imgs_src, clds_src, masks_src)):
+        kp_src, des_src = detector.detectAndCompute(img_src, mask_src)
         if len(kp_src) == 0:
             continue
         uv_src = np.array([k.pt for k in kp_src], dtype=np.int32)
         pts_src = cld_src[uv_src[:, 1], uv_src[:, 0]]
+
+        globals()["uv_src"] = uv_src
+        globals()["img_src"] = img_src
 
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
         fig.tight_layout()
@@ -182,20 +193,26 @@ def match_features(imgs_src, clds_src, img_dst, cld_dst, mask2=None):
 
 
 if __name__ == "__main__":
-    """ load model images """
-    imgs_src, clds_src, poses_src = pickle.load(open("ycbv/20-extra_large_clamp.pt", "rb"))
+    """load model images"""
+    data = pickle.load(open("ycbv/1-master_chef_can.pt", "rb"))
+    if len(data) == 3:
+        imgs_src, clds_src, poses_src = data
+        masks_src = None
+    else:
+        imgs_src, clds_src, masks_src, poses_src = data
+        masks_src = masks_src.astype(np.uint8) * 255
 
     """ load scene image """
     img_dst = cv2.imread("bop_data/ycbv/test/000048/rgb/000001.png", cv2.IMREAD_COLOR_RGB)
-    depth2 = cv2.imread("bop_data/ycbv/test/000048/depth/000001.png", cv2.IMREAD_UNCHANGED)
-    mask2 = cv2.imread("bop_data/ycbv/test/000048/mask/000001_000004.png", cv2.IMREAD_UNCHANGED)
-    cld_dst = util.depth2cld(depth2 * 0.0001, [1066.778, 0.0, 312.9869, 0.0, 1067.487, 241.3109, 0.0, 0.0, 1.0])
+    depth_dst = cv2.imread("bop_data/ycbv/test/000048/depth/000001.png", cv2.IMREAD_UNCHANGED)
+    mask_dst = cv2.imread("bop_data/ycbv/test/000048/mask/000001_000000.png", cv2.IMREAD_UNCHANGED)
+    cld_dst = util.depth2cld(depth_dst * 0.0001, [1066.778, 0.0, 312.9869, 0.0, 1067.487, 241.3109, 0.0, 0.0, 1.0])
 
     """ match features """
-    match_features(imgs_src, clds_src, img_dst, cld_dst, mask2)
+    match_features(imgs_src, img_dst, clds_src, cld_dst, masks_src, mask_dst)
 
-    # imgs_src, clds_src, poses_src = pickle.load(open("carbinet.pt", "rb"))
-    # imgs_dst, clds_dst, poses_dst = pickle.load(open("carbinet_eval2.pt", "rb"))
+    # imgs_src, clds_src, poses_src = pickle.load(open("cabinet.pt", "rb"))
+    # imgs_dst, clds_dst, poses_dst = pickle.load(open("cabinet_eval2.pt", "rb"))
 
     # img_dst = imgs_dst[3]
     # cld_dst = clds_dst[3]
