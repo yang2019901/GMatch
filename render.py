@@ -296,7 +296,9 @@ def vis_snapshots(snapshots):
 
 
 # 加载模型
-model_path = r"/home/yang2019901/GMatch-ORB/bop_data/hope/models/obj_000006.ply"
+model_path = r"/home/yang2019901/GMatch-ORB/bop_data/ycbv/models/obj_000021.ply"
+pt_path = r"ycbv/21-foam_brick.pt"
+
 model = load_ply(model_path)
 mesh = o3d.geometry.TriangleMesh()
 mesh.vertices = o3d.utility.Vector3dVector(model["pts"] * 0.001)
@@ -310,15 +312,17 @@ if "texture_file" in model:
     uvs[:, 1] = 1 - uvs[:, 1]
     mesh.triangle_uvs = o3d.utility.Vector2dVector(uvs)
     mesh.triangle_material_ids = o3d.utility.IntVector([0] * len(faces))
+elif "colors" in model:
+    mesh.vertex_colors = o3d.utility.Vector3dVector(model["colors"] / 255)
 
 # calc diameter of the model
 bbox = np.max(model["pts"], axis=0) - np.min(model["pts"], axis=0)
-print("bbox: ", bbox)
+print(f"saved to {pt_path}, bbox: {bbox}")
 
 # # 显示模型
 # o3d.visualization.draw_geometries([mesh])
 
 # 拍摄 RGBD 图像
 snapshots = get_snapshots(mesh)
-# vis_snapshots(snapshots)
-save_snapshots(snapshots, "cookies.pt")
+vis_snapshots(snapshots)
+save_snapshots(snapshots, pt_path)
