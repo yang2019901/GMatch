@@ -262,7 +262,8 @@ def load_ply(path) -> o3d.geometry.TriangleMesh:
 
 
 def get_snapshots(mesh):
-    """snapshots: [(rgb, cld, M_ex), ...]
+    """
+    snapshots: [(rgb, cld, M_ex), ...]
     rgb: (H, W, 3), 0~1
     cld: (H, W, 3), meters
     M_ex: (4, 4)
@@ -316,10 +317,11 @@ def get_snapshots(mesh):
 
 
 def save_snapshots(snapshots, path):
-    """ imgs: (N, H, W, 3), 0~255, uint8
-        clds: (N, H, W, 3), meters, float32
-        masks: (N, H, W), bool
-        poses: [(pos, quat), ...]
+    """
+    imgs: (N, H, W, 3), 0~255, uint8
+    clds: (N, H, W, 3), meters, float32
+    masks: (N, H, W), bool
+    poses: [(pos, quat), ...]
     """
     rgbs, clds, masks, M_ex_list = zip(*snapshots)
     imgs = np.asarray(np.stack(rgbs) * 255, dtype=np.uint8)

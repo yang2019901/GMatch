@@ -1,12 +1,8 @@
 ## use ORB to match features between two images
 import numpy as np
 import cv2
-import time
 import matplotlib.pyplot as plt
 from matplotlib import patches
-import pickle
-import cProfile
-
 import util
 
 np.random.seed(0)
@@ -41,13 +37,9 @@ def HamDist(a, b):
 
 
 def tree_search(pts1, pts2, Mh12):
-    N_good = 100  # number of good matches
-    D = 16  # search depth
-    K = 256
-    thresh_ham = 100  # threshold for hamming distance
-    thresh_loss = 0.1  # if the maximum loss of adding `m` to matches is less than this, accept `m`
     n1, n2 = Mh12.shape
     matches = []
+    rlt = []
 
     def loss(m):
         """m: (n, 2), matches: (d, 2)"""
@@ -62,7 +54,7 @@ def tree_search(pts1, pts2, Mh12):
         return res
 
     def flipover(m):
-        """ m: (n, 2), return (n, ) boolean array"""
+        """m: (n, 2), return (n, ) boolean array"""
         if len(matches) < 2:
             return np.zeros(len(m), dtype=bool)
         v1 = pts1[matches[-2][0]] - pts1[matches[-1][0]]
@@ -83,18 +75,16 @@ def tree_search(pts1, pts2, Mh12):
         matches.append((i, j))
         global img_dst, img_src, uv_dst, uv_src
         # plot_matches(img_src, img_dst, uv_src[np.array(matches)[:, 0]], uv_dst[np.array(matches)[:, 1]])
-        ## search for the next match
+
+        ## step(), search for the next match
         while True:
             if len(matches) == D:
                 break
-            ## sample K indices from kp1
-            pts1_ind = np.random.choice(n1, min(K, n1), replace=False)
-            ## find all the points in kp2 that has Mh12 < thresh_ham
-            dists = Mh12[pts1_ind, :]  # (K, L2)
+            dists = Mh12
             pairs = np.argwhere(dists < thresh_ham)
             if len(pairs) == 0:
                 break
-            matches_alt = np.column_stack((pts1_ind[pairs[:, 0]], pairs[:, 1]))  # (n, 2)
+            matches_alt = np.column_stack((pairs[:, 0], pairs[:, 1]))  # (n, 2)
 
             ## filter with distance loss
             losses = loss(matches_alt)  # (n, )
@@ -113,15 +103,14 @@ def tree_search(pts1, pts2, Mh12):
             best = np.argmin(losses)
             matches.append(tuple(matches_alt[best]))
 
-        if len(matches) == D:
+        if len(matches) > len(rlt):
+            rlt = matches.copy()
+        matches.clear()
+        if len(rlt) == D:
             break
-        else:
-            # print("clear matches, re-search.")
-            matches.clear()
 
-    if len(matches) < D:
-        print("Not enough matches found")
-    return np.array(matches)
+    # print(f"matches found, depth: {len(rlt)}, expected: {D}")
+    return np.array(rlt)
 
 
 def GetHamMat(des1, des2):
@@ -146,12 +135,13 @@ def GetHamMat(des1, des2):
 
 
 def match_features(imgs_src, img_dst, clds_src, cld_dst, masks_src=None, mask_dst=None):
-    """imgs_src, clds_src: (N, H, W, 3)
+    """
+    imgs_src, clds_src: (N, H, W, 3)
     img_dst, cld_dst: (H, W, 3), (H, W, 3)
     """
     detector: cv2.ORB = cv2.ORB_create()
 
-    detector.setMaxFeatures(500)
+    detector.setMaxFeatures(N2)
     kp_dst, des_dst = detector.detectAndCompute(img_dst, mask_dst)
     if len(kp_dst) == 0:
         print("No keypoints found in img2")
@@ -163,7 +153,7 @@ def match_features(imgs_src, img_dst, clds_src, cld_dst, masks_src=None, mask_ds
     globals()["img_dst"] = img_dst
 
     ## find the keypoints and descriptors with detector
-    detector.setMaxFeatures(600)
+    detector.setMaxFeatures(N1)
     if masks_src is None:
         masks_src = [None] * len(imgs_src)
     for _, (img_src, cld_src, mask_src) in enumerate(zip(imgs_src, clds_src, masks_src)):
@@ -186,36 +176,16 @@ def match_features(imgs_src, img_dst, clds_src, cld_dst, masks_src=None, mask_ds
 
         Mh12 = GetHamMat(des_src, des_dst)
         matches = tree_search(pts_src, pts_dst, Mh12)
-        if len(matches) != 0:
-            print(f"matches found: {matches}")
+        if len(matches) < 3:
+            print("no matches found")
+        else:
+            print(f"matches found: {matches}, depth: {len(matches)}")
             plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
-            break
 
 
-if __name__ == "__main__":
-    """load model images"""
-    data = pickle.load(open("ycbv/1-master_chef_can.pt", "rb"))
-    if len(data) == 3:
-        imgs_src, clds_src, poses_src = data
-        masks_src = None
-    else:
-        imgs_src, clds_src, masks_src, poses_src = data
-        masks_src = masks_src.astype(np.uint8) * 255
-
-    """ load scene image """
-    img_dst = cv2.imread("bop_data/ycbv/test/000048/rgb/000001.png", cv2.IMREAD_COLOR_RGB)
-    depth_dst = cv2.imread("bop_data/ycbv/test/000048/depth/000001.png", cv2.IMREAD_UNCHANGED)
-    mask_dst = cv2.imread("bop_data/ycbv/test/000048/mask/000001_000000.png", cv2.IMREAD_UNCHANGED)
-    cld_dst = util.depth2cld(depth_dst * 0.0001, [1066.778, 0.0, 312.9869, 0.0, 1067.487, 241.3109, 0.0, 0.0, 1.0])
-
-    """ match features """
-    match_features(imgs_src, img_dst, clds_src, cld_dst, masks_src, mask_dst)
-
-    # imgs_src, clds_src, poses_src = pickle.load(open("cabinet.pt", "rb"))
-    # imgs_dst, clds_dst, poses_dst = pickle.load(open("cabinet_eval2.pt", "rb"))
-
-    # img_dst = imgs_dst[3]
-    # cld_dst = clds_dst[3]
-    # mask = np.zeros(img_dst.shape[:2], dtype=np.uint8)
-    # mask[50:300, 200:400] = 255
-    # match_features(imgs_src, clds_src, img_dst, cld_dst, mask)
+N1 = 500
+N2 = 500
+N_good = 25  # number of good matches
+D = 24  # max search depth
+thresh_ham = 100  # threshold for hamming distance
+thresh_loss = 0.08  # if the maximum loss of adding `m` to matches is less than this, accept `m`
