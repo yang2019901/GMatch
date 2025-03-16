@@ -47,7 +47,20 @@ def vis_cld(clds, colors=None, poses=None):
         _colors = np.array(colors).reshape(-1, 3) / 255.0
         pcd.colors = o3d.utility.Vector3dVector(_colors)
     axis = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
-    o3d.visualization.draw_geometries([pcd, axis])
+    # o3d.visualization.draw_geometries([pcd, axis])
+    vis = o3d.visualization.Visualizer()
+    vis.create_window()
+    vis.add_geometry(pcd)
+    vis.add_geometry(axis)
+
+    ctr = vis.get_view_control()
+    ctr.set_lookat([0, 0, 0])
+    ctr.set_front([0, 0, -1])
+    ctr.set_up([0, -1, 0])
+    ctr.set_zoom(0.01)
+
+    vis.run()
+    vis.destroy_window()
 
 
 def load_ply(path) -> o3d.geometry.TriangleMesh:

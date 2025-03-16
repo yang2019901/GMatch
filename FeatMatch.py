@@ -22,8 +22,7 @@ def plot_matches(img1, img2, uv1, uv2):
             xyA=pt1, xyB=pt2, axesA=ax1, axesB=ax2, coordsA="data", coordsB="data", color="green"
         )
         fig.add_artist(l)
-    mngr = plt.get_current_fig_manager()
-    mngr.window.wm_geometry("+380+310")
+    fig.suptitle(f"matches: {len(uv1)}")
     fig.tight_layout()
     plt.show()
     return
@@ -74,7 +73,7 @@ def tree_search(pts1, pts2, Mh12):
     for i, j in good:
         matches.append((i, j))
         global img_dst, img_src, uv_dst, uv_src
-        # plot_matches(img_src, img_dst, uv_src[np.array(matches)[:, 0]], uv_dst[np.array(matches)[:, 1]])
+        cv2.imshow("matches", cv2.drawMatches(img_src, kp_src, img_dst, kp_dst, [cv2.DMatch(i, j, 0)]))
 
         ## step(), search for the next match
         while True:
@@ -109,8 +108,14 @@ def tree_search(pts1, pts2, Mh12):
         if len(rlt) == D:
             break
 
-    # print(f"matches found, depth: {len(rlt)}, expected: {D}")
-    return np.array(rlt)
+    rlt = np.asarray(rlt)
+    if len(rlt) < 3:
+        return np.array([]), None
+    else:
+        dists1 = Me11[rlt[:, 0][:, np.newaxis], rlt[:, 0]]
+        dists2 = Me22[rlt[:, 1][:, np.newaxis], rlt[:, 1]]
+        diff = np.abs(np.divide(dists1 - dists2, dists1, out=np.zeros_like(dists1), where=dists1 != 0))
+        return np.array(rlt), np.max(diff).item()
 
 
 def GetHamMat(des1, des2):
@@ -149,22 +154,19 @@ def match_features(imgs_src, img_dst, clds_src, cld_dst, masks_src=None, mask_ds
     uv_dst = np.array([k.pt for k in kp_dst], dtype=np.int32)
     pts_dst = cld_dst[uv_dst[:, 1], uv_dst[:, 0]]
 
-    globals()["uv_dst"] = uv_dst
-    globals()["img_dst"] = img_dst
-
     ## find the keypoints and descriptors with detector
     detector.setMaxFeatures(N1)
     if masks_src is None:
         masks_src = [None] * len(imgs_src)
+    matches_list = []
+    uvs_src = []
     for _, (img_src, cld_src, mask_src) in enumerate(zip(imgs_src, clds_src, masks_src)):
         kp_src, des_src = detector.detectAndCompute(img_src, mask_src)
         if len(kp_src) == 0:
             continue
         uv_src = np.array([k.pt for k in kp_src], dtype=np.int32)
         pts_src = cld_src[uv_src[:, 1], uv_src[:, 0]]
-
-        globals()["uv_src"] = uv_src
-        globals()["img_src"] = img_src
+        uvs_src.append(uv_src)
 
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
         fig.tight_layout()
@@ -175,12 +177,21 @@ def match_features(imgs_src, img_dst, clds_src, cld_dst, masks_src=None, mask_ds
         plt.show()
 
         Mh12 = GetHamMat(des_src, des_dst)
-        matches = tree_search(pts_src, pts_dst, Mh12)
+        matches, loss = tree_search(pts_src, pts_dst, Mh12)
         if len(matches) < 3:
             print("no matches found")
         else:
-            print(f"matches found: {matches}, depth: {len(matches)}")
+            print(f"matches found: {matches}, depth: {len(matches)}, loss: {loss}")
             plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
+            matches_list.append((matches, loss))
+    ## take max depth matches as the best
+    idx_best = np.argmax([len(matches) for matches, _ in matches_list])
+    img_src = imgs_src[idx_best]
+    uv_src = uvs_src[idx_best]
+    matches = matches_list[idx_best][0]
+    plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
+    return matches
+    
 
 
 N1 = 500
