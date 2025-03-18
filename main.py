@@ -87,11 +87,11 @@ if __name__ == "__main__":
     mask_id = "1"
 
     ## FeatMatch parameters override
-    FeatMatch.N1 = 500
-    FeatMatch.N2 = 600
+    FeatMatch.N1 = None
+    FeatMatch.N2 = None
     FeatMatch.N_good = 30
     FeatMatch.D = 24
-    FeatMatch.thresh_ham = 100
+    FeatMatch.thresh_des = 400
     FeatMatch.thresh_loss = 0.08
     FeatMatch.thresh_flip = 0.05
 

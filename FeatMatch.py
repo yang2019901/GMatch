@@ -48,7 +48,7 @@ def plot_keypoints(img1, img2, kp1, kp2, Mh12):
         ax1.plot(selected_kp.pt[0], selected_kp.pt[1], "ro", markersize=3)
         # 计算与选中点的海明距离
         dists = Mh12[idx1]
-        alts = np.where(dists < thresh_ham)[0]
+        alts = np.where(dists < thresh_des)[0]
         # 高亮img_dst中的特征点
         for alt in alts:
             ax2.plot(kp2[alt].pt[0], kp2[alt].pt[1], "r*", markersize=3)
@@ -77,17 +77,12 @@ def plot_keypoints(img1, img2, kp1, kp2, Mh12):
     ax2.imshow(img2)
     ax1.scatter([kp.pt[0] for kp in kp1], [kp.pt[1] for kp in kp1], c="g", s=3)
     ax2.scatter([kp.pt[0] for kp in kp2], [kp.pt[1] for kp in kp2], c="g", s=3)
+    ax1.set_title(f"keypoints: {len(kp1)}")
+    ax2.set_title(f"keypoints: {len(kp2)}")
     fig.tight_layout()
     fig.canvas.mpl_connect("button_press_event", on_click_src)
     fig.canvas.mpl_connect("button_press_event", on_click_dst)
     plt.show()
-
-
-def HamDist(a, b):
-    rlt = 0
-    for i in range(len(a)):
-        rlt += _ham_tab[a[i] ^ b[i]]
-    return rlt
 
 
 def tree_search(pts1, pts2, Mh12):
@@ -133,7 +128,7 @@ def tree_search(pts1, pts2, Mh12):
             if len(matches) == D:
                 break
             dists = Mh12
-            pairs = np.argwhere(dists < thresh_ham)
+            pairs = np.argwhere(dists < thresh_des)
             if len(pairs) == 0:
                 break
             matches_alt = np.column_stack((pairs[:, 0], pairs[:, 1]))  # (n, 2)
@@ -197,9 +192,10 @@ def match_features(imgs_src, img_dst, clds_src, cld_dst, masks_src=None, mask_ds
     imgs_src, clds_src: (N, H, W, 3)
     img_dst, cld_dst: (H, W, 3), (H, W, 3)
     """
-    detector: cv2.ORB = cv2.ORB_create()
+    detector: cv2.SIFT = cv2.SIFT_create()
 
-    detector.setMaxFeatures(N2)
+    # detector.setMaxFeatures(N2)
+    # detector.setNFeatures(N2)
     kp_dst, des_dst = detector.detectAndCompute(img_dst, mask_dst)
     if len(kp_dst) == 0:
         print("No keypoints found in img2")
@@ -207,13 +203,14 @@ def match_features(imgs_src, img_dst, clds_src, cld_dst, masks_src=None, mask_ds
     uv_dst = np.array([k.pt for k in kp_dst], dtype=np.int32)
     pts_dst = cld_dst[uv_dst[:, 1], uv_dst[:, 0]]
 
-    ## find the keypoints and descriptors with detector
-    detector.setMaxFeatures(N1)
+    "find the keypoints and descriptors with detector"
+    # detector.setMaxFeatures(N1)
+    # detector.setNFeatures(N1)
     if masks_src is None:
         masks_src = [None] * len(imgs_src)
     matches_list = []
     uvs_src = []
-    for _, (img_src, cld_src, mask_src) in enumerate(zip(imgs_src, clds_src, masks_src)):
+    for i, (img_src, cld_src, mask_src) in enumerate(zip(imgs_src, clds_src, masks_src)):
         kp_src, des_src = detector.detectAndCompute(img_src, mask_src)
         if len(kp_src) == 0:
             continue
@@ -221,6 +218,7 @@ def match_features(imgs_src, img_dst, clds_src, cld_dst, masks_src=None, mask_ds
         pts_src = cld_src[uv_src[:, 1], uv_src[:, 0]]
         uvs_src.append(uv_src)
 
+        "Tune N1 and N2: plot to see whether keypoints are enough"
         # fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
         # fig.tight_layout()
         # ax1.set_title(f"keypoints: {len(pts_src)}")
@@ -229,20 +227,22 @@ def match_features(imgs_src, img_dst, clds_src, cld_dst, masks_src=None, mask_ds
         # ax2.imshow(cv2.drawKeypoints(img_dst, kp_dst, None))
         # plt.show()
 
-        Mh12 = GetHamMat(des_src, des_dst)
+        # Mh12 = GetHamMat(des_src, des_dst)
+        Mh12 = np.linalg.norm(des_src[:, np.newaxis, :] - des_dst[np.newaxis, :, :], axis=-1)
 
+        "Tune thresh_des: find a suitable threshold for descriptor distance"
         # print("plotting keypoints")
         # plot_keypoints(img_src, img_dst, kp_src, kp_dst, Mh12)
         # exit()
 
         matches, loss = tree_search(pts_src, pts_dst, Mh12)
         if len(matches) < 3:
-            print("no matches found")
+            print(f"No. {i}: matches NOT found.")
         else:
-            print(f"matches found: {matches}, depth: {len(matches)}, loss: {loss}")
-            plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
+            print(f"No. {i}: matches found. depth {len(matches)}, loss {loss:.3f}")
+            # plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
             matches_list.append((matches, loss))
-    ## take max depth matches as the best
+    "take max depth matches as the best"
     idx_best = np.argmax([len(matches) for matches, _ in matches_list])
     img_src = imgs_src[idx_best]
     uv_src = uvs_src[idx_best]
@@ -255,6 +255,6 @@ N1 = 500
 N2 = 500
 N_good = 25  # number of good matches
 D = 24  # max search depth
-thresh_ham = 100  # threshold for hamming distance
+thresh_des = 100  # threshold for descriptor distance, used to judge two descriptors' similarity
 thresh_loss = 0.08  # if the maximum loss of adding `m` to matches is less than this, accept `m`
-thresh_flip = 0.05  # threshold for flipover
+thresh_flip = 0.05  # threshold for flipover judgement
