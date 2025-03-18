@@ -28,6 +28,61 @@ def plot_matches(img1, img2, uv1, uv2):
     return
 
 
+def plot_keypoints(img1, img2, kp1, kp2, Mh12):
+    idx1 = -1
+    alts = []
+
+    def on_click_src(event):
+        nonlocal idx1, alts
+        if event.inaxes != ax1:
+            return
+        ax1.plot(kp1[idx1].pt[0], kp1[idx1].pt[1], "go", markersize=3)
+        for alt in alts:
+            ax2.plot(kp2[alt].pt[0], kp2[alt].pt[1], "go", markersize=3)
+
+        x, y = int(event.xdata), int(event.ydata)
+        distances = np.linalg.norm(np.array([k.pt for k in kp1]) - np.array([x, y]), axis=1)
+        idx1 = np.argmin(distances)
+        print(f"Selected kp_src index: {idx1}")
+        selected_kp = kp1[idx1]
+        ax1.plot(selected_kp.pt[0], selected_kp.pt[1], "ro", markersize=3)
+        # 计算与选中点的海明距离
+        dists = Mh12[idx1]
+        alts = np.where(dists < thresh_ham)[0]
+        # 高亮img_dst中的特征点
+        for alt in alts:
+            ax2.plot(kp2[alt].pt[0], kp2[alt].pt[1], "r*", markersize=3)
+        fig.canvas.draw()
+
+    idx2 = -1
+
+    def on_click_dst(event):
+        nonlocal idx1, idx2
+        if event.inaxes != ax2:
+            return
+        if idx2 != -1:
+            ax2.plot(kp2[idx2].pt[0], kp2[idx2].pt[1], "go", markersize=3)
+        x, y = int(event.xdata), int(event.ydata)
+        distances = np.linalg.norm(np.array([k.pt for k in kp2]) - np.array([x, y]), axis=1)
+        idx2 = np.argmin(distances)
+        print(f"Selected kp_dst index: {idx2}")
+        if idx1 != -1:
+            print(f"Hamming distance: {Mh12[idx1, idx2]}")
+        selected_kp = kp2[idx2]
+        ax2.plot(selected_kp.pt[0], selected_kp.pt[1], "bo", markersize=3)
+        fig.canvas.draw()
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
+    ax1.imshow(img1)
+    ax2.imshow(img2)
+    ax1.scatter([kp.pt[0] for kp in kp1], [kp.pt[1] for kp in kp1], c="g", s=3)
+    ax2.scatter([kp.pt[0] for kp in kp2], [kp.pt[1] for kp in kp2], c="g", s=3)
+    fig.tight_layout()
+    fig.canvas.mpl_connect("button_press_event", on_click_src)
+    fig.canvas.mpl_connect("button_press_event", on_click_dst)
+    plt.show()
+
+
 def HamDist(a, b):
     rlt = 0
     for i in range(len(a)):
@@ -62,7 +117,8 @@ def tree_search(pts1, pts2, Mh12):
         v2_ = pts2[m[:, 1]] - pts2[matches[-1][1]]
         n1 = np.cross(v1, v1_) / np.linalg.norm(v1) / np.linalg.norm(v1_)
         n2 = np.cross(v2, v2_) / np.linalg.norm(v2) / np.linalg.norm(v2_)
-        flags = np.bitwise_and(n1[:, 2] * n2[:, 2] < 0, np.abs(n1[:, 2] - n2[:, 2]) > 0.1)
+        ## flipover threshold may need to be adjusted
+        flags = np.bitwise_and(n1[:, 2] * n2[:, 2] < 0, np.abs(n1[:, 2] - n2[:, 2]) > thresh_flip)
         return flags
 
     Me11 = np.linalg.norm(pts1[:, np.newaxis, :] - pts1, axis=-1)
@@ -72,9 +128,6 @@ def tree_search(pts1, pts2, Mh12):
 
     for i, j in good:
         matches.append((i, j))
-        global img_dst, img_src, uv_dst, uv_src
-        cv2.imshow("matches", cv2.drawMatches(img_src, kp_src, img_dst, kp_dst, [cv2.DMatch(i, j, 0)]))
-
         ## step(), search for the next match
         while True:
             if len(matches) == D:
@@ -168,15 +221,20 @@ def match_features(imgs_src, img_dst, clds_src, cld_dst, masks_src=None, mask_ds
         pts_src = cld_src[uv_src[:, 1], uv_src[:, 0]]
         uvs_src.append(uv_src)
 
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
-        fig.tight_layout()
-        ax1.set_title(f"keypoints: {len(pts_src)}")
-        ax1.imshow(cv2.drawKeypoints(img_src, kp_src, None))
-        ax2.set_title(f"keypoints: {len(pts_dst)}")
-        ax2.imshow(cv2.drawKeypoints(img_dst, kp_dst, None))
-        plt.show()
+        # fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+        # fig.tight_layout()
+        # ax1.set_title(f"keypoints: {len(pts_src)}")
+        # ax1.imshow(cv2.drawKeypoints(img_src, kp_src, None))
+        # ax2.set_title(f"keypoints: {len(pts_dst)}")
+        # ax2.imshow(cv2.drawKeypoints(img_dst, kp_dst, None))
+        # plt.show()
 
         Mh12 = GetHamMat(des_src, des_dst)
+
+        # print("plotting keypoints")
+        # plot_keypoints(img_src, img_dst, kp_src, kp_dst, Mh12)
+        # exit()
+
         matches, loss = tree_search(pts_src, pts_dst, Mh12)
         if len(matches) < 3:
             print("no matches found")
@@ -191,7 +249,6 @@ def match_features(imgs_src, img_dst, clds_src, cld_dst, masks_src=None, mask_ds
     matches = matches_list[idx_best][0]
     plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
     return matches
-    
 
 
 N1 = 500
@@ -200,3 +257,4 @@ N_good = 25  # number of good matches
 D = 24  # max search depth
 thresh_ham = 100  # threshold for hamming distance
 thresh_loss = 0.08  # if the maximum loss of adding `m` to matches is less than this, accept `m`
+thresh_flip = 0.05  # threshold for flipover

@@ -70,8 +70,8 @@ def set_meta():
     mask_path = f"{proj_path}/bop_data/{dataset}/test/{scene_id}/mask/{img_id}_{mask_id}.png"
     json_path = f"{proj_path}/bop_data/{dataset}/test/{scene_id}/scene_camera.json"
     with open(json_path, "r") as f:
-        s = img_id.lstrip('0')
-        img_camera = json.load(f)['0' if s == '' else s]
+        s = img_id.lstrip("0")
+        img_camera = json.load(f)["0" if s == "" else s]
         cam_intrin = img_camera["cam_K"]
         depth_scale = img_camera["depth_scale"]
     globals().update(locals())
@@ -93,6 +93,7 @@ if __name__ == "__main__":
     FeatMatch.D = 24
     FeatMatch.thresh_ham = 100
     FeatMatch.thresh_loss = 0.08
+    FeatMatch.thresh_flip = 0.05
 
     set_meta()
     if not os.path.exists(pt_path):
@@ -100,17 +101,17 @@ if __name__ == "__main__":
     main()
 
     ## bop19 test set
-    with open(f'{proj_path}/bop_data/{dataset}/test_targets_bop19.json', 'r') as f:
+    with open(f"{proj_path}/bop_data/{dataset}/test_targets_bop19.json", "r") as f:
         targets = json.load(f)
         id_list = []
         for i, target in enumerate(targets):
-            if target['im_id'] != 0 or target['scene_id'] != 1:
+            if target["im_id"] != 0 or target["scene_id"] != 1:
                 break
-            if target['inst_count'] > 1:
-                id_list.append(target['obj_id'])
-            pt_name = str(target['obj_id'])
-            img_id = str(target['im_id'])
-            scene_id = str(target['scene_id'])
+            if target["inst_count"] > 1:
+                id_list.append(target["obj_id"])
+            pt_name = str(target["obj_id"])
+            img_id = str(target["im_id"])
+            scene_id = str(target["scene_id"])
             mask_id = str(i)
             set_meta()
             main()
