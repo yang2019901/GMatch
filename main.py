@@ -1,9 +1,8 @@
 import open3d as o3d
 import numpy as np
-import pickle
-import cv2
-import json
-import os
+import matplotlib.pyplot as plt
+import pickle, cv2
+import json, os
 
 import FeatMatch
 import util
@@ -45,16 +44,8 @@ def main():
     # util.vis_cld(cld_dst, img_dst)
 
     """ match features """
-    FeatMatch.match_features(imgs_src, img_dst, clds_src, cld_dst, masks_src, mask_dst)
-
-    # imgs_src, clds_src, poses_src = pickle.load(open("cabinet.pt", "rb"))
-    # imgs_dst, clds_dst, poses_dst = pickle.load(open("cabinet_eval2.pt", "rb"))
-
-    # img_dst = imgs_dst[3]
-    # cld_dst = clds_dst[3]
-    # mask = np.zeros(img_dst.shape[:2], dtype=np.uint8)
-    # mask[50:300, 200:400] = 255
-    # match_features(imgs_src, clds_src, img_dst, cld_dst, mask)
+    matches = FeatMatch.match_features(imgs_src, img_dst, clds_src, cld_dst, masks_src, mask_dst)
+    print(f"length of matches: {len(matches)}")
 
 
 def set_meta():
@@ -81,37 +72,55 @@ if __name__ == "__main__":
     ## no suffix here
     proj_path = "/home/yang2019901/GMatch-ORB"
     dataset = "hope"
-    pt_name = "15"
+    pt_name = "20"
     scene_id = "1"
-    img_id = "0"
-    mask_id = "1"
+    img_id = "1"
+    mask_id = "3"
 
     ## FeatMatch parameters override
-    FeatMatch.N1 = None
-    FeatMatch.N2 = None
+    FeatMatch.N1 = 500
+    FeatMatch.N2 = 500
     FeatMatch.N_good = 30
     FeatMatch.D = 24
-    FeatMatch.thresh_des = 400
+    FeatMatch.thresh_des = 0.1
     FeatMatch.thresh_loss = 0.08
     FeatMatch.thresh_flip = 0.05
 
-    set_meta()
-    if not os.path.exists(pt_path):
-        render()
-    main()
+    # set_meta()
+    # if not os.path.exists(pt_path):
+    #     render()
+    # main()
+    # exit()
 
     ## bop19 test set
     with open(f"{proj_path}/bop_data/{dataset}/test_targets_bop19.json", "r") as f:
         targets = json.load(f)
         id_list = []
-        for i, target in enumerate(targets):
-            if target["im_id"] != 0 or target["scene_id"] != 1:
-                break
+        num_dup = 0
+        i = 0
+        img_id = None
+        for target in targets:
+            if img_id is not None and str(target["im_id"]).zfill(6) != img_id:
+                print(f"im_id switching: {img_id} -> {target['im_id']}")
+                """im_id switching, time to deal with id_list"""
+                for j in range(num_dup):
+                    mask_id = str(i + j)
+                    for obj_id in id_list:
+                        pt_name = str(obj_id)
+                        print(f"obj: {pt_name}, scene: {scene_id}, img: {img_id}, mask: {mask_id}")
+                        set_meta()
+                        main()
+                i, num_dup = 0, 0
+                id_list.clear()
+
             if target["inst_count"] > 1:
                 id_list.append(target["obj_id"])
+                num_dup += target["inst_count"] - 1
             pt_name = str(target["obj_id"])
             img_id = str(target["im_id"])
             scene_id = str(target["scene_id"])
             mask_id = str(i)
+            print(f"obj: {pt_name}, scene: {scene_id}, img: {img_id}, mask: {mask_id}")
             set_meta()
-            main()
+            # main()
+            i += 1
