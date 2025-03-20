@@ -10,14 +10,14 @@ from scipy.spatial.transform import Rotation
 def pose2mat(pose):
     """pose: [[x, y, z], [qx, qy, qz, qw]], M: 4x4"""
     M = np.eye(4)
-    M[:3, 3] = pose[0]
+    M[:3, 3] = np.array(pose[0]).flatten()
     M[:3, :3] = Rotation.from_quat(pose[1]).as_matrix()
     return M
 
 
 def mat2pose(M):
     """pose: [[x, y, z], [qx, qy, qz, qw]], M: 4x4"""
-    return [M[:3, 3], Rotation.from_matrix(M[:3, :3]).as_quat()]
+    return [np.copy(M[:3, 3]), Rotation.from_matrix(np.copy(M[:3, :3])).as_quat()]
 
 
 def transform(pts, pose):
@@ -37,30 +37,15 @@ def depth2cld(depth, intrisic):
 
 
 def vis_cld(clds, colors=None, poses=None):
-    if poses is not None:
-        _clds = np.array([transform(cld, pose) for cld, pose in zip(clds, poses)])
-    else:
-        _clds = np.array(clds)
+    _clds = [transform(cld, pose).reshape(-1, 3) for cld, pose in zip(clds, poses)] if poses is not None else clds
+
     pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(_clds.reshape(-1, 3))
+    pcd.points = o3d.utility.Vector3dVector(np.concatenate(_clds, axis=0))
     if colors is not None:
-        _colors = np.array(colors).reshape(-1, 3) / 255.0
-        pcd.colors = o3d.utility.Vector3dVector(_colors)
-    axis = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
-    # o3d.visualization.draw_geometries([pcd, axis])
-    vis = o3d.visualization.Visualizer()
-    vis.create_window()
-    vis.add_geometry(pcd)
-    vis.add_geometry(axis)
-
-    ctr = vis.get_view_control()
-    ctr.set_lookat([0, 0, 0])
-    ctr.set_front([0, 0, -1])
-    ctr.set_up([0, -1, 0])
-    ctr.set_zoom(0.01)
-
-    vis.run()
-    vis.destroy_window()
+        _colors = [np.array(color).reshape(-1, 3) / 255.0 for color in colors]
+        pcd.colors = o3d.utility.Vector3dVector(np.concatenate(_colors, axis=0))
+    axis = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
+    o3d.visualization.draw_geometries([pcd, axis], lookat=[0, 0, 1], front=[0, 0, -1], up=[0, -1, 0], zoom=0.2)
 
 
 def load_ply(path) -> o3d.geometry.TriangleMesh:
@@ -287,20 +272,21 @@ def get_snapshots(mesh):
 
     # 设置相机参数
     camera_params = [
-        ## octahedron sample
-        # {"front": [1, 0, 0], "lookat": [0, 0, 0], "up": [0, 0, 1]},  # x+
-        # {"front": [-1, 0, 0], "lookat": [0, 0, 0], "up": [0, 0, 1]},  # x-
-        # {"front": [0, 1, 0], "lookat": [0, 0, 0], "up": [0, 0, 1]},  # y+
-        # {"front": [0, -1, 0], "lookat": [0, 0, 0], "up": [0, 0, 1]},  # y-
-        # {"front": [0, 0, 1], "lookat": [0, 0, 0], "up": [0, 1, 0]},  # z+
-        # {"front": [0, 0, -1], "lookat": [0, 0, 0], "up": [0, 1, 0]},  # z-
-        {"front": [1, 1, 0], "lookat": [0, 0, 0], "up": [0, 0, 1]},
-        {"front": [-1, 1, 0], "lookat": [0, 0, 0], "up": [0, 0, 1]},
-        {"front": [-1, -1, 0], "lookat": [0, 0, 0], "up": [0, 0, 1]},
-        {"front": [1, -1, 0], "lookat": [0, 0, 0], "up": [0, 0, 1]},
-        {"front": [0, 0, 1], "lookat": [0, 0, 0], "up": [0, 1, 0]},
-        {"front": [0, 0, -1], "lookat": [0, 0, 0], "up": [0, 1, 0]},
-        ## hexahedron sample
+        ## 6-axis sampling
+        {"front": [1, 0, 0], "lookat": [0, 0, 0], "up": [0, 0, 1]},  # x+
+        {"front": [-1, 0, 0], "lookat": [0, 0, 0], "up": [0, 0, 1]},  # x-
+        {"front": [0, 1, 0], "lookat": [0, 0, 0], "up": [0, 0, 1]},  # y+
+        {"front": [0, -1, 0], "lookat": [0, 0, 0], "up": [0, 0, 1]},  # y-
+        {"front": [0, 0, 1], "lookat": [0, 0, 0], "up": [0, 1, 0]},  # z+
+        {"front": [0, 0, -1], "lookat": [0, 0, 0], "up": [0, 1, 0]},  # z-
+        ## rotated 6-axis sampling
+        # {"front": [1, 1, 0], "lookat": [0, 0, 0], "up": [0, 0, 1]},
+        # {"front": [-1, 1, 0], "lookat": [0, 0, 0], "up": [0, 0, 1]},
+        # {"front": [-1, -1, 0], "lookat": [0, 0, 0], "up": [0, 0, 1]},
+        # {"front": [1, -1, 0], "lookat": [0, 0, 0], "up": [0, 0, 1]},
+        # {"front": [0, 0, 1], "lookat": [0, 0, 0], "up": [0, 1, 0]},
+        # {"front": [0, 0, -1], "lookat": [0, 0, 0], "up": [0, 1, 0]},
+        ## 8-axis sampling
         # {"front": [1, 1, 1], "lookat": [0, 0, 0], "up": [0, -1, 1]},
         # {"front": [1, 1, -1], "lookat": [0, 0, 0], "up": [0, 1, 1]},
         # {"front": [1, -1, -1], "lookat": [0, 0, 0], "up": [0, -1, 1]},

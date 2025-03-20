@@ -2,7 +2,7 @@ import open3d as o3d
 import numpy as np
 import matplotlib.pyplot as plt
 import pickle, cv2
-import json, os
+import json, os, time
 
 import FeatMatch
 import util
@@ -26,6 +26,8 @@ def render():
 
 
 def main():
+    if not os.path.exists(pt_path):
+        render()
     """load model images"""
     data = pickle.load(open(pt_path, "rb"))
     if len(data) == 3:
@@ -44,8 +46,38 @@ def main():
     # util.vis_cld(cld_dst, img_dst)
 
     """ match features """
-    matches = FeatMatch.match_features(imgs_src, img_dst, clds_src, cld_dst, masks_src, mask_dst)
-    print(f"length of matches: {len(matches)}")
+    idx, uv_src, uv_dst = FeatMatch.match_features(imgs_src, img_dst, clds_src, cld_dst, masks_src, mask_dst)
+    print(f"length of matches: {len(uv_src)}")
+
+    """ solve PnP """
+    pts_obj = clds_src[idx, uv_src[:, 1], uv_src[:, 0], :]
+    ret, rvec, tvec, inliners = cv2.solvePnPRansac(
+        pts_obj, uv_dst.astype(np.float32), np.array(cam_intrin).reshape(3, 3), None
+    )
+    R, _ = cv2.Rodrigues(rvec)
+    rot = util.Rotation.from_matrix(R).as_quat()
+    pos = tvec.flatten()
+    mat_v2c = util.pose2mat([pos, rot])  # view to camera
+    mat_v2m = util.pose2mat(poses_src[idx])
+    mat_m2c = mat_v2c @ np.linalg.inv(mat_v2m)
+
+    """ create point cloud """
+    pcd_src, pcd_dst = o3d.geometry.PointCloud(), o3d.geometry.PointCloud()
+    for i in range(len(clds_src)):
+        pts = util.transform(clds_src[i][masks_src[i] != 0], poses_src[i])
+        pcd_src.points.extend(o3d.utility.Vector3dVector(pts.reshape(-1, 3)))
+    pcd_src = pcd_src.voxel_down_sample(voxel_size=0.002)
+    pcd_dst.points = o3d.utility.Vector3dVector(cld_dst.reshape(-1, 3))
+    pcd_src.paint_uniform_color([1, 0, 0])
+
+    """ refine with icp """
+    rlt = o3d.pipelines.registration.registration_icp(pcd_src, pcd_dst, 0.01, mat_m2c)
+    mat_m2c = rlt.transformation
+    print(f"icp result: {rlt}")
+
+    pcd_src.transform(mat_m2c)
+    o3d.visualization.draw_geometries([pcd_src, pcd_dst], lookat=[0, 0, 1], front=[0, 0, -1], up=[0, -1, 0], zoom=0.2)
+    print(f"model in camera, pos: \n{mat_m2c}")
 
 
 def set_meta():
@@ -72,10 +104,10 @@ if __name__ == "__main__":
     ## no suffix here
     proj_path = "/home/yang2019901/GMatch-ORB"
     dataset = "hope"
-    pt_name = "20"
+    pt_name = "16"
     scene_id = "1"
     img_id = "1"
-    mask_id = "3"
+    mask_id = "0"
 
     ## FeatMatch parameters override
     FeatMatch.N1 = 500
@@ -86,13 +118,13 @@ if __name__ == "__main__":
     FeatMatch.thresh_loss = 0.08
     FeatMatch.thresh_flip = 0.05
 
-    # set_meta()
-    # if not os.path.exists(pt_path):
-    #     render()
-    # main()
-    # exit()
+    set_meta()
+    if not os.path.exists(pt_path):
+        render()
+    main()
+    exit()
 
-    ## bop19 test set
+    """ bop19 test set """
     with open(f"{proj_path}/bop_data/{dataset}/test_targets_bop19.json", "r") as f:
         targets = json.load(f)
         id_list = []
@@ -122,5 +154,5 @@ if __name__ == "__main__":
             mask_id = str(i)
             print(f"obj: {pt_name}, scene: {scene_id}, img: {img_id}, mask: {mask_id}")
             set_meta()
-            # main()
+            main()
             i += 1

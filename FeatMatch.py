@@ -260,7 +260,7 @@ def match_features(imgs_src, img_dst, clds_src, cld_dst, masks_src=None, mask_ds
     uv_src = uvs_src[idx_best]
     matches = matches_list[idx_best][0]
     plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
-    return matches
+    return idx_best, uv_src[matches[:, 0]], uv_dst[matches[:, 1]]
 
 
 N1 = 500
