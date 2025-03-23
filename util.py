@@ -3,8 +3,68 @@ import open3d as o3d
 import pickle
 import struct
 import os
+import json
 
 from scipy.spatial.transform import Rotation
+
+
+class MetaData:
+    """
+    xxx_id: int
+    xxx_name: 0-padded string
+    """
+
+    def __init__(self, proj_path, dataset):
+        self.proj_path = proj_path
+        self.dataset = dataset
+
+    def init(self, pt_id: int = None, scene_id: int = None, img_id: int = None, mask_id: int = None):
+        self.pt_id = pt_id if pt_id is not None else self.pt_id
+        self.scene_id = scene_id if scene_id is not None else self.scene_id
+        self.img_id = img_id if img_id is not None else self.img_id
+        self.mask_id = mask_id if mask_id is not None else self.mask_id
+
+        model_name = f"obj_{str(self.pt_id).zfill(6)}"
+        scene_name = str(self.scene_id).zfill(6)
+        img_name = str(self.img_id).zfill(6)
+        mask_name = str(self.mask_id).zfill(6)
+
+        self.model_path = os.path.join(self.proj_path, f"bop_data/{self.dataset}/models/{model_name}.ply")
+        self.pt_path = os.path.join(self.proj_path, f"{self.dataset}/{self.pt_id}.pt")
+        self.img_path = os.path.join(self.proj_path, f"bop_data/{self.dataset}/test/{scene_name}/rgb/{img_name}.png")
+        self.depth_path = os.path.join(
+            self.proj_path, f"bop_data/{self.dataset}/test/{scene_name}/depth/{img_name}.png"
+        )
+        self.mask_path = os.path.join(
+            self.proj_path, f"bop_data/{self.dataset}/test/{scene_name}/mask/{img_name}_{mask_name}.png"
+        )
+
+        json_path = os.path.join(self.proj_path, f"bop_data/{self.dataset}/test/{scene_name}/scene_camera.json")
+        with open(json_path, "r") as f:
+            img_camera = json.load(f)[str(self.img_id)]
+            self.cam_intrin = img_camera["cam_K"]
+            self.depth_scale = img_camera["depth_scale"]
+
+
+class MatchData:
+    """data required for match and result"""
+
+    def __init__(self):
+        """data required for match"""
+        self.imgs_src = []
+        self.clds_src = []
+        self.masks_src = []
+        self.poses_src = []
+        self.img_dst = None
+        self.cld_dst = None
+        self.mask_dst = None
+        """ match result """
+        self.matches_list = []  # list of matches, see FeatMatch.match_features
+        self.loss_list = []  # list of loss, ranging 0-1, see FeatMatch.match_features
+        self.uvs_src = []  # keypoints extracted from each source image
+        self.uv_dst = None  # keypoints extracted from the destination image
+        self.idx_best = None  # index of the best matches (longest)
+        self.mat_m2c = None # model to camera transformation matrix, 4x4
 
 
 def pose2mat(pose):
@@ -28,10 +88,10 @@ def transform(pts, pose):
 
 
 def depth2cld(depth, intrisic):
-    intrin = np.array(intrisic).reshape(3, 3)
-    z = depth
+    intrin = np.array(intrisic, dtype=np.float32).reshape(3, 3)
+    z = np.asarray(depth, np.float32)
     u, v = np.meshgrid(range(z.shape[1]), range(z.shape[0]))
-    uv = np.stack((u, v, np.ones_like(u)), axis=-1)
+    uv = np.stack((u, v, np.ones_like(u)), axis=-1, dtype=np.float32)
     pts = np.linalg.inv(intrin) @ uv.reshape(-1, 3).T * z.reshape(-1)
     return pts.T.reshape(z.shape[0], z.shape[1], 3)
 
@@ -304,6 +364,7 @@ def get_snapshots(mesh):
         ctr.set_lookat(params["lookat"])
         ctr.set_front(params["front"])
         ctr.set_up(params["up"])
+        ctr.set_zoom(1.2)
         vis.poll_events()
         vis.update_renderer()
 

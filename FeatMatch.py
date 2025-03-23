@@ -1,4 +1,4 @@
-## use ORB to match features between two images
+""" use ORB/SIFT detector to match features between two images """ 
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
@@ -47,10 +47,8 @@ def plot_keypoints(img1, img2, kp1, kp2, Mh12):
         ax1.set_title(f"keypoints: {len(kp1)}, selected: {idx1}")
         selected_kp = kp1[idx1]
         ax1.plot(selected_kp.pt[0], selected_kp.pt[1], "ro", markersize=3)
-        # 计算与选中点的海明距离
         dists = Mh12[idx1]
         alts = np.where(dists < thresh_des)[0]
-        # 高亮img_dst中的特征点
         for alt in alts:
             ax2.plot(kp2[alt].pt[0], kp2[alt].pt[1], "r*", markersize=3)
         if idx2 != -1:
@@ -191,17 +189,16 @@ def GetHamMat(des1, des2):
     return Mh
 
 
-def match_features(imgs_src, img_dst, clds_src, cld_dst, masks_src=None, mask_dst=None):
-    """
+def match_features(match_data:util.MatchData):
+    """ match imgs_src and img_dst in match_data and store the result in it
     imgs_src, clds_src: (N, H, W, 3)
     img_dst, cld_dst: (H, W, 3), (H, W, 3)
     """
-    # detector:cv2.ORB = cv2.ORB_create()
-    detector: cv2.SIFT = cv2.SIFT_create()
-    detector.setContrastThreshold(0.03)
-
-    # detector.setMaxFeatures(N2)
-    # detector.setNFeatures(N2)
+    global detector
+    assert len(match_data.imgs_src) > 0, "imgs_src is empty"
+    """ load from match_data """
+    imgs_src, clds_src, masks_src = match_data.imgs_src, match_data.clds_src, match_data.masks_src
+    img_dst, cld_dst, mask_dst = match_data.img_dst, match_data.cld_dst, match_data.mask_dst
     kp_dst, des_dst = detector.detectAndCompute(img_dst, mask_dst)
     if len(kp_dst) == 0:
         print("No keypoints found in img2")
@@ -210,8 +207,6 @@ def match_features(imgs_src, img_dst, clds_src, cld_dst, masks_src=None, mask_ds
     pts_dst = cld_dst[uv_dst[:, 1], uv_dst[:, 0]]
 
     """ find the keypoints and descriptors with detector """
-    # detector.setMaxFeatures(N1)
-    # detector.setNFeatures(N1)
     if masks_src is None:
         masks_src = [None] * len(imgs_src)
     matches_list = []
@@ -220,48 +215,53 @@ def match_features(imgs_src, img_dst, clds_src, cld_dst, masks_src=None, mask_ds
         # img_src = cv2.medianBlur(img_src, 5)
         kp_src, des_src = detector.detectAndCompute(img_src, mask_src)
         if len(kp_src) == 0:
+            matches_list.append(([], 1))
             continue
         uv_src = np.array([k.pt for k in kp_src], dtype=np.int32)
         pts_src = cld_src[uv_src[:, 1], uv_src[:, 0]]
         uvs_src.append(uv_src)
 
-        """ Tune N1 and N2: plot to see whether keypoints are enough """
-        # fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
-        # fig.tight_layout()
-        # ax1.set_title(f"keypoints: {len(pts_src)}")
-        # ax1.imshow(cv2.drawKeypoints(img_src, kp_src, None))
-        # ax2.set_title(f"keypoints: {len(pts_dst)}")
-        # ax2.imshow(cv2.drawKeypoints(img_dst, kp_dst, None))
-        # plt.show()
-
         # Mh12 = GetHamMat(des_src, des_dst)
-        """ use root-SIFT (root of L1-normalized SIFT) to compute descriptor distance """
+        # """ root-SIFT (root of L1-normalized SIFT) """
         # des_src = np.sqrt(des_src / np.sum(des_src, axis=-1, keepdims=True))
         # des_dst = np.sqrt(des_dst / np.sum(des_dst, axis=-1, keepdims=True))
+        """ L1-normalized SIFT """
         des_src = des_src / np.sum(des_src, axis=-1, keepdims=True)
         des_dst = des_dst / np.sum(des_dst, axis=-1, keepdims=True)
         Mh12 = np.linalg.norm(des_src[:, np.newaxis, :] - des_dst[np.newaxis, :, :], axis=-1)
 
-        """ Tune thresh_des: find a suitable threshold for descriptor distance """
+        """ <Tune>
+            N1 and N2: plot to see whether keypoints are enough
+            thresh_des: find a suitable threshold for descriptor distance
+        """
         # plot_keypoints(img_src, img_dst, kp_src, kp_dst, Mh12)
 
         matches, loss = tree_search(pts_src, pts_dst, Mh12)
         matches_list.append((matches, loss))
+        if len(matches) == D:
+            break
         # if len(matches) < 3:
         #     print(f"\timgs_src[{i}]: matches NOT found.")
         # else:
         #     print(f"\timgs_src[{i}]: matches found. depth {len(matches)}, loss {loss:.3f}")
         # #     plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
     """ take max depth matches as the best """
-    if len(matches_list) == 0:
-        return []
-    idx_best = np.argmax([len(matches) for matches, _ in matches_list])
-    img_src = imgs_src[idx_best]
-    uv_src = uvs_src[idx_best]
-    matches = matches_list[idx_best][0]
-    plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
-    return idx_best, uv_src[matches[:, 0]], uv_dst[matches[:, 1]]
+    match_data.matches_list, match_data.loss_list = zip(*matches_list)
+    match_data.uvs_src = uvs_src
+    match_data.uv_dst = uv_dst
+    match_data.idx_best = np.argmax([len(matches) for matches, _ in matches_list])
 
+    """ visualization """
+    # if len(matches_list) != 0:
+    #     img_src = imgs_src[match_data.idx_best]
+    #     uv_src = uvs_src[match_data.idx_best]
+    #     matches = matches_list[match_data.idx_best][0]
+    #     plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
+    return
+
+
+detector: cv2.SIFT = cv2.SIFT_create()
+detector.setContrastThreshold(0.03)
 
 N1 = 500
 N2 = 500
