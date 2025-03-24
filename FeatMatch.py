@@ -1,4 +1,5 @@
-""" use ORB/SIFT detector to match features between two images """ 
+""" use ORB/SIFT detector to match features between two images """
+
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
@@ -120,7 +121,9 @@ def tree_search(pts1, pts2, Mh12):
 
     Me11 = np.linalg.norm(pts1[:, np.newaxis, :] - pts1, axis=-1)
     Me22 = np.linalg.norm(pts2[:, np.newaxis, :] - pts2, axis=-1)
-    part_indices = np.argpartition(np.reshape(Mh12, -1), N_good)[:N_good]
+    part_indices = (
+        np.argpartition(np.reshape(Mh12, -1), N_good)[:N_good] if N_good < n1 * n2 else np.arange(n1 * n2, dtype=int)
+    )
     good = np.array(np.unravel_index(part_indices, Mh12.shape)).T
 
     for i, j in good:
@@ -189,8 +192,8 @@ def GetHamMat(des1, des2):
     return Mh
 
 
-def match_features(match_data:util.MatchData):
-    """ match imgs_src and img_dst in match_data and store the result in it
+def match_features(match_data: util.MatchData):
+    """match imgs_src and img_dst in match_data and store the result in it
     imgs_src, clds_src: (N, H, W, 3)
     img_dst, cld_dst: (H, W, 3), (H, W, 3)
     """
@@ -212,7 +215,6 @@ def match_features(match_data:util.MatchData):
     matches_list = []
     uvs_src = []
     for i, (img_src, cld_src, mask_src) in enumerate(zip(imgs_src, clds_src, masks_src)):
-        # img_src = cv2.medianBlur(img_src, 5)
         kp_src, des_src = detector.detectAndCompute(img_src, mask_src)
         if len(kp_src) == 0:
             matches_list.append(([], 1))
@@ -240,11 +242,14 @@ def match_features(match_data:util.MatchData):
         matches_list.append((matches, loss))
         if len(matches) == D:
             break
+        
+        """ visualization """
         # if len(matches) < 3:
         #     print(f"\timgs_src[{i}]: matches NOT found.")
         # else:
         #     print(f"\timgs_src[{i}]: matches found. depth {len(matches)}, loss {loss:.3f}")
-        # #     plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
+        #     plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
+
     """ take max depth matches as the best """
     match_data.matches_list, match_data.loss_list = zip(*matches_list)
     match_data.uvs_src = uvs_src
@@ -252,7 +257,7 @@ def match_features(match_data:util.MatchData):
     match_data.idx_best = np.argmax([len(matches) for matches, _ in matches_list])
 
     """ visualization """
-    # if len(matches_list) != 0:
+    # if len(match_data.matches_list[match_data.idx_best]) > 0:
     #     img_src = imgs_src[match_data.idx_best]
     #     uv_src = uvs_src[match_data.idx_best]
     #     matches = matches_list[match_data.idx_best][0]

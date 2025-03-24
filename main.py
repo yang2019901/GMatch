@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 import pickle, cv2
 import json, os, time
 import cProfile
+import multiprocessing
+from multiprocessing import Lock, set_start_method
 
 import FeatMatch
 import util
@@ -22,18 +24,26 @@ def render(meta_data):
     util.save_snapshots(snapshots, meta_data.pt_path)
 
 
-def load(meta_data, match_data):
+cache = {}
+
+
+def load(meta_data: util.MetaData, match_data: util.MatchData):
     """load by meta_data and store to match_data"""
     if not os.path.exists(meta_data.pt_path):
         render(meta_data)
     """load model images"""
-    data = pickle.load(open(meta_data.pt_path, "rb"))
-    if len(data) == 3:
-        imgs_src, clds_src, poses_src = data
-        masks_src = None
+    if meta_data.pt_id not in cache:
+        """load from disk"""
+        data = pickle.load(open(meta_data.pt_path, "rb"))
+        if len(data) == 3:
+            imgs_src, clds_src, poses_src = data
+            masks_src = None
+        else:
+            imgs_src, clds_src, masks_src, poses_src = data
+            masks_src = masks_src.astype(np.uint8) * 255
+        cache[meta_data.pt_id] = (imgs_src, clds_src, masks_src, poses_src)
     else:
-        imgs_src, clds_src, masks_src, poses_src = data
-        masks_src = masks_src.astype(np.uint8) * 255
+        imgs_src, clds_src, masks_src, poses_src = cache[meta_data.pt_id]
 
     """ load scene image """
     img_dst = cv2.imread(meta_data.img_path, cv2.IMREAD_COLOR_RGB)
@@ -56,13 +66,16 @@ def solve(match_data):
     """solve correspondence with the best match in match_data"""
     idx = match_data.idx_best
     matches = match_data.matches_list[idx]
+
+    if len(matches) < 3:
+        print("Warning: Pose estimation failed, not enough matches")
+        match_data.mat_m2c = np.eye(4)
+        return
+
     uv_src = match_data.uvs_src[idx][matches[:, 0]]
     uv_dst = match_data.uv_dst[matches[:, 1]]
     clds_src, masks_src, poses_src = match_data.clds_src, match_data.masks_src, match_data.poses_src
     img_dst, cld_dst, mask_dst = match_data.img_dst, match_data.cld_dst, match_data.mask_dst
-
-    if len(uv_src) < 3:
-        match_data.mat_m2c = np.eye(4)
 
     """ solve correspondence (Note: dont use cv2.PnPRansac, it sucks) """
     pcd1, pcd2 = o3d.geometry.PointCloud(), o3d.geometry.PointCloud()
@@ -77,16 +90,16 @@ def solve(match_data):
     mat_m2c = mat_v2c @ np.linalg.inv(mat_v2m)
 
     """ create point cloud """
-    # pcd_src, pcd_dst = o3d.geometry.PointCloud(), o3d.geometry.PointCloud()
-    # for i in range(len(clds_src)):
-    #     pts = util.transform(clds_src[i][masks_src[i] != 0], poses_src[i])
-    #     pcd_src.points.extend(o3d.utility.Vector3dVector(pts.reshape(-1, 3)))
-    # pcd_dst.points = o3d.utility.Vector3dVector(cld_dst[mask_dst != 0].reshape(-1, 3))
+    pcd_src, pcd_dst = o3d.geometry.PointCloud(), o3d.geometry.PointCloud()
+    for i in range(len(clds_src)):
+        pts = util.transform(clds_src[i][masks_src[i] != 0], poses_src[i])
+        pcd_src.points.extend(o3d.utility.Vector3dVector(pts.reshape(-1, 3)))
+    pcd_dst.points = o3d.utility.Vector3dVector(cld_dst[mask_dst != 0].reshape(-1, 3))
 
     """ refine with icp """
-    # pcd_src = pcd_src.voxel_down_sample(voxel_size=0.002)
-    # rlt = o3d.pipelines.registration.registration_icp(pcd_src, pcd_dst, 0.01, mat_m2c)
-    # mat_m2c = rlt.transformation
+    pcd_src = pcd_src.voxel_down_sample(voxel_size=0.002)
+    rlt = o3d.pipelines.registration.registration_icp(pcd_src, pcd_dst, 0.01, mat_m2c)
+    mat_m2c = rlt.transformation
 
     """ visualization """
     # pcd_src.paint_uniform_color([1, 0, 0])
@@ -95,8 +108,62 @@ def solve(match_data):
     # o3d.visualization.draw_geometries([pcd_src, pcd_dst], lookat=[0, 0, 1], front=[0, 0, -1], up=[0, -1, 0], zoom=1)
 
     """ store result """
+    # print(f"model in camera, pos: \n{mat_m2c}")
     match_data.mat_m2c = mat_m2c
-    print(f"model in camera, pos: \n{mat_m2c}")
+    return
+
+
+def result2record(meta_data: util.MetaData, match_data: util.MatchData):
+    """record is formatted as bop19 result except that timespan is missing"""
+    scene_id, im_id, obj_id = meta_data.scene_id, meta_data.img_id, meta_data.pt_id
+    score = len(match_data.matches_list[match_data.idx_best])
+    ## Note: convert `t` to mm, leave `R` as it is for it has no unit
+    R, t = match_data.mat_m2c[:3, :3], match_data.mat_m2c[:3, 3] * 1000
+    R = " ".join(map(lambda x: f"{x:.6f}", R.flatten().tolist()))
+    t = " ".join(map(lambda x: f"{x:.6f}", t.flatten().tolist()))
+    return [str(scene_id), str(im_id), str(obj_id), str(score), R, t]
+
+
+def process_img(meta_data, match_data, targets):
+    """targets: a list of `target` where `target` is (mask_id, scene_id, img_id, objs_id), dtype=(int, int, int, List[int])
+    meta_data, match_data: cache assigned to the function
+    """
+    t0 = time.time()
+    record_list = []
+    for target in targets:
+        mask_id, scene_id, img_id, obj_ids = target
+        print(f"scene: {scene_id}, img: {img_id}, mask: {mask_id}")
+        match_data_list = []
+        for obj_id in obj_ids:
+            meta_data.init(pt_id=obj_id, scene_id=scene_id, img_id=img_id, mask_id=mask_id)
+            load(meta_data, match_data)
+            FeatMatch.match_features(match_data)
+            print(f"\tobj: {meta_data.pt_id}, len: {len(match_data.matches_list[match_data.idx_best])}")
+            match_data_list.append(match_data)
+        match_data = max(match_data_list, key=lambda x: len(x.matches_list[x.idx_best]))
+        solve(match_data)
+        record_list.append(result2record(meta_data, match_data))
+    timespan = time.time() - t0
+    return [f'{", ".join(rec)}, {timespan:.2f}\n' for rec in record_list]
+
+
+lock = None
+
+
+def worker(targets):
+    global lock
+    meta_data = util.MetaData(proj_path="/home/yang2019901/GMatch-ORB", dataset="hope")
+    match_data = util.MatchData()
+    result = process_img(meta_data, match_data, targets)
+    print("process done")
+    with lock:
+        with open("result.csv", "a") as f:
+            f.writelines(result)
+
+
+def init(l):
+    global lock
+    lock = l
 
 
 if __name__ == "__main__":
@@ -112,47 +179,74 @@ if __name__ == "__main__":
     FeatMatch.thresh_loss = 0.08
     FeatMatch.thresh_flip = 0.05
 
-    # meta_data.init(pt_id="3", scene_id="1", img_id="0", mask_id="14")
+    # meta_data.init(pt_id=1, scene_id=35, img_id=1, mask_id=20)
     # load(meta_data, match_data)
-    # cProfile.run("FeatMatch.match_features(match_data)", "a.prof", sort="cumulative")
+    # FeatMatch.match_features(match_data)
     # solve(match_data)
     # exit()
 
     """ bop19 test set """
     with open(f"{meta_data.proj_path}/bop_data/{meta_data.dataset}/test_targets_bop19.json", "r") as f:
-        targets = json.load(f)
-        obj_list = []
-        num_dup = 0
-        i = 0
-        img_id = None
-        for target in targets:
-            if img_id is not None and target["im_id"] != img_id:
-                print(f"im_id switching: {img_id} -> {target['im_id']}")
-                """im_id switching, time to deal with id_list"""
-                for j in range(num_dup):
-                    mask_id = i + j
-                    mds = []  # match_data list
-                    print(f"scene: {meta_data.scene_id}, img: {img_id}, mask: {mask_id}")
-                    for obj_id in obj_list:
-                        meta_data.init(pt_id=obj_id, img_id=img_id, mask_id=mask_id)
-                        print(f"\tobj: {meta_data.pt_id}")
-                        load(meta_data, match_data)
-                        FeatMatch.match_features(match_data)
-                        mds.append(match_data)
-                    match_data = max(mds, key=lambda x: len(x.matches_list))
-                    solve(match_data)
-                i, num_dup = 0, 0
-                obj_list.clear()
+        content = json.load(f)
 
-            if target["inst_count"] > 1:
-                obj_list.append(target["obj_id"])
-                num_dup += target["inst_count"] - 1
-            meta_data.init(pt_id=target["obj_id"], scene_id=target["scene_id"], img_id=target["im_id"], mask_id=i)
-            print(
-                f"obj: {meta_data.pt_id}, scene: {meta_data.scene_id}, img: {meta_data.img_id}, mask: {meta_data.mask_id}"
-            )
-            load(meta_data, match_data)
-            FeatMatch.match_features(match_data)
-            solve(match_data)
-            img_id = target["im_id"]
-            i += 1
+    img_id_last, scene_id_last = None, None
+    num_dup = 0
+    objs_id = []
+    targets = []
+    targets_list = []
+    ## Obs1: mask_id starts from 0
+    ## Obs2: in test_targets_bop19.json, the order of obj_id is just the same as mask file suffix order (aka, mask_id, here)
+    for _, line in enumerate(content):
+        if img_id_last is None:
+            img_id_last = line["im_id"]
+        if line["im_id"] != img_id_last:
+            n = len(targets)
+            targets += [(mask_id, scene_id_last, img_id_last, objs_id) for mask_id in range(n, n + num_dup)]
+            targets_list.append(targets)
+            num_dup = 0
+            objs_id = []
+            targets = []
+        ## instance count > 1, add it to candidates `objs_id`
+        if line["inst_count"] > 1:
+            num_dup += line["inst_count"] - 1
+            objs_id.append(line["obj_id"])
+        targets.append((len(targets), line["scene_id"], line["im_id"], [line["obj_id"]]))
+
+        img_id_last = line["im_id"]
+        scene_id_last = line["scene_id"]
+
+    print("targets_list:", len(targets_list))
+
+    with open("result.csv", "r") as f:
+        lines = f.readlines()
+    if len(lines) > 1:
+        scene_id_resume, img_id_resume = map(int, lines[-1].split(",")[:2])
+    else:
+        scene_id_resume, img_id_resume = -1, -1
+
+    with open("result.csv", "a") as f:
+        for targets in targets_list:
+            scene_id, img_id = targets[0][1], targets[0][2]
+            if scene_id < scene_id_resume or (scene_id == scene_id_resume and img_id <= img_id_resume):
+                continue
+            results = process_img(meta_data, match_data, targets)
+            f.writelines(results)
+
+
+    """ multiprocess if memory is enough """
+    # ## write heads to csv
+    # with open("result.csv", "w") as f:
+    #     f.write("scene_id,im_id,obj_id,score,R,t,time\n")
+
+    # set_start_method("forkserver")
+    # ## create process pool
+    # lock = Lock()
+    # pool = multiprocessing.Pool(processes=4, initializer=init, initargs=(lock, ))
+    # error_cb = lambda e: print(f"error: {e}")
+
+    # ## start processing
+    # for targets in targets_list:
+    #     pool.apply_async(worker, args=(targets, ), error_callback=error_cb)
+
+    # pool.close()
+    # pool.join()
