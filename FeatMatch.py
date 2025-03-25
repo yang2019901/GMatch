@@ -179,16 +179,12 @@ def GetHamMat(des1, des2):
     ## broadcast des1 and des2
     des1_ = des1[:, np.newaxis, :]
     des2_ = des2[np.newaxis, :, :]
-
     ## compute xor result
     xor_result = des1_ ^ des2_
-
     ## compute hamming distance
     hamming_distances = _ham_tab[xor_result]
-
     ## sum along the last axis to get the hamming distance matrix
     Mh = np.sum(hamming_distances, axis=-1)
-
     return Mh
 
 

@@ -4,8 +4,7 @@ import matplotlib.pyplot as plt
 import pickle, cv2
 import json, os, time
 import cProfile
-import multiprocessing
-from multiprocessing import Lock, set_start_method
+import copy
 
 import FeatMatch
 import util
@@ -22,6 +21,22 @@ def render(meta_data):
     snapshots = util.get_snapshots(mesh)
     util.vis_snapshots(snapshots)
     util.save_snapshots(snapshots, meta_data.pt_path)
+
+
+def equalize_hist(imgs_src, img_dst, masks_src, mask_dst):
+    """equalize histogram
+    imgs_src: (N, H, W, 3), img_dst: (H, W, 3)
+    masks_src: (N, H, W), mask_dst: (H, W)
+    """
+    pix1 = imgs_src[masks_src != 0, :]
+    pix2 = img_dst[mask_dst != 0, :]
+    # convert to gray by weighted sum
+    y1 = 0.299 * pix1[:, 0] + 0.587 * pix1[:, 1] + 0.114 * pix1[:, 2]
+    y2 = 0.299 * pix2[:, 0] + 0.587 * pix2[:, 1] + 0.114 * pix2[:, 2]
+    k = np.mean(y1) / np.mean(y2)
+    print(f"Preprocess - equalize hist coeff: {k:.2f}")
+    rlt = cv2.multiply(img_dst, np.array([k, k, k]))
+    return rlt
 
 
 cache = {}
@@ -124,7 +139,7 @@ def result2record(meta_data: util.MetaData, match_data: util.MatchData):
     return [str(scene_id), str(im_id), str(obj_id), str(score), R, t]
 
 
-def process_img(meta_data, match_data, targets):
+def process_img(meta_data:util.MetaData, match_data:util.MatchData, targets):
     """targets: a list of `target` where `target` is (mask_id, scene_id, img_id, objs_id), dtype=(int, int, int, List[int])
     meta_data, match_data: cache assigned to the function
     """
@@ -139,31 +154,14 @@ def process_img(meta_data, match_data, targets):
             load(meta_data, match_data)
             FeatMatch.match_features(match_data)
             print(f"\tobj: {meta_data.pt_id}, len: {len(match_data.matches_list[match_data.idx_best])}")
-            match_data_list.append(match_data)
-        match_data = max(match_data_list, key=lambda x: len(x.matches_list[x.idx_best]))
+            match_data_list.append(copy.copy(match_data))
+        k = max(enumerate(match_data_list), key=lambda x: len(x[1].matches_list[x[1].idx_best]))[0]
+        match_data = match_data_list[k]
+        meta_data.init(pt_id=obj_ids[k], scene_id=scene_id, img_id=img_id, mask_id=mask_id)
         solve(match_data)
         record_list.append(result2record(meta_data, match_data))
     timespan = time.time() - t0
     return [f'{", ".join(rec)}, {timespan:.2f}\n' for rec in record_list]
-
-
-lock = None
-
-
-def worker(targets):
-    global lock
-    meta_data = util.MetaData(proj_path="/home/yang2019901/GMatch-ORB", dataset="hope")
-    match_data = util.MatchData()
-    result = process_img(meta_data, match_data, targets)
-    print("process done")
-    with lock:
-        with open("result.csv", "a") as f:
-            f.writelines(result)
-
-
-def init(l):
-    global lock
-    lock = l
 
 
 if __name__ == "__main__":
@@ -179,7 +177,7 @@ if __name__ == "__main__":
     FeatMatch.thresh_loss = 0.08
     FeatMatch.thresh_flip = 0.05
 
-    # meta_data.init(pt_id=1, scene_id=35, img_id=1, mask_id=20)
+    # meta_data.init(pt_id=22, scene_id=4, img_id=0, mask_id=19)
     # load(meta_data, match_data)
     # FeatMatch.match_features(match_data)
     # solve(match_data)
@@ -217,36 +215,18 @@ if __name__ == "__main__":
 
     print("targets_list:", len(targets_list))
 
-    with open("result.csv", "r") as f:
-        lines = f.readlines()
-    if len(lines) > 1:
-        scene_id_resume, img_id_resume = map(int, lines[-1].split(",")[:2])
-    else:
-        scene_id_resume, img_id_resume = -1, -1
+    # with open("result.csv", "r") as f:
+    #     lines = f.readlines()
+    # if len(lines) > 1:
+    #     scene_id_resume, img_id_resume = map(int, lines[-1].split(",")[:2])
+    # else:
+    #     scene_id_resume, img_id_resume = -1, -1
 
     with open("result.csv", "a") as f:
         for targets in targets_list:
-            scene_id, img_id = targets[0][1], targets[0][2]
-            if scene_id < scene_id_resume or (scene_id == scene_id_resume and img_id <= img_id_resume):
-                continue
+            # scene_id, img_id = targets[0][1], targets[0][2]
+            # if scene_id < scene_id_resume or (scene_id == scene_id_resume and img_id <= img_id_resume):
+            #     continue
             results = process_img(meta_data, match_data, targets)
             f.writelines(results)
-
-
-    """ multiprocess if memory is enough """
-    # ## write heads to csv
-    # with open("result.csv", "w") as f:
-    #     f.write("scene_id,im_id,obj_id,score,R,t,time\n")
-
-    # set_start_method("forkserver")
-    # ## create process pool
-    # lock = Lock()
-    # pool = multiprocessing.Pool(processes=4, initializer=init, initargs=(lock, ))
-    # error_cb = lambda e: print(f"error: {e}")
-
-    # ## start processing
-    # for targets in targets_list:
-    #     pool.apply_async(worker, args=(targets, ), error_callback=error_cb)
-
-    # pool.close()
-    # pool.join()
+            f.flush()
