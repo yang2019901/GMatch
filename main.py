@@ -2,7 +2,7 @@ import open3d as o3d
 import numpy as np
 import matplotlib.pyplot as plt
 import pickle, cv2
-import json, os, time
+import json, os.path, time
 import cProfile
 import copy
 
@@ -139,7 +139,7 @@ def result2record(meta_data: util.MetaData, match_data: util.MatchData):
     return [str(scene_id), str(im_id), str(obj_id), str(score), R, t]
 
 
-def process_img(meta_data:util.MetaData, match_data:util.MatchData, targets):
+def process_img(meta_data: util.MetaData, match_data: util.MatchData, targets):
     """targets: a list of `target` where `target` is (mask_id, scene_id, img_id, objs_id), dtype=(int, int, int, List[int])
     meta_data, match_data: cache assigned to the function
     """
@@ -149,12 +149,14 @@ def process_img(meta_data:util.MetaData, match_data:util.MatchData, targets):
         mask_id, scene_id, img_id, obj_ids = target
         print(f"scene: {scene_id}, img: {img_id}, mask: {mask_id}")
         match_data_list = []
+        ## for each possible obj_id, match it with the scene
         for obj_id in obj_ids:
             meta_data.init(pt_id=obj_id, scene_id=scene_id, img_id=img_id, mask_id=mask_id)
             load(meta_data, match_data)
-            FeatMatch.match_features(match_data)
+            FeatMatch.match_features(match_data, meta_data.pt_id)
             print(f"\tobj: {meta_data.pt_id}, len: {len(match_data.matches_list[match_data.idx_best])}")
             match_data_list.append(copy.copy(match_data))
+        ## take the object with the most matches
         k = max(enumerate(match_data_list), key=lambda x: len(x[1].matches_list[x[1].idx_best]))[0]
         match_data = match_data_list[k]
         meta_data.init(pt_id=obj_ids[k], scene_id=scene_id, img_id=img_id, mask_id=mask_id)
@@ -165,7 +167,7 @@ def process_img(meta_data:util.MetaData, match_data:util.MatchData, targets):
 
 
 if __name__ == "__main__":
-    meta_data = util.MetaData(proj_path="/home/yang2019901/GMatch-ORB", dataset="hope")
+    meta_data = util.MetaData(proj_path=os.path.dirname(os.path.abspath(__file__)), dataset="hope")
     match_data = util.MatchData()
 
     """ FeatMatch parameters override """
@@ -174,7 +176,7 @@ if __name__ == "__main__":
     FeatMatch.N_good = 25
     FeatMatch.D = 24
     FeatMatch.thresh_des = 0.1
-    FeatMatch.thresh_loss = 0.08
+    FeatMatch.thresh_cost = 0.08
     FeatMatch.thresh_flip = 0.05
 
     # meta_data.init(pt_id=22, scene_id=4, img_id=0, mask_id=19)
@@ -184,7 +186,7 @@ if __name__ == "__main__":
     # exit()
 
     """ bop19 test set """
-    with open(f"{meta_data.proj_path}/bop_data/{meta_data.dataset}/test_targets_bop19.json", "r") as f:
+    with open("targets_manual_label.json", "r") as f:
         content = json.load(f)
 
     img_id_last, scene_id_last = None, None

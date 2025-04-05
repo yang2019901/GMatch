@@ -5,6 +5,8 @@ import struct
 import os
 import json
 
+import matplotlib.pyplot as plt
+from matplotlib import patches
 from scipy.spatial.transform import Rotation
 
 
@@ -60,11 +62,11 @@ class MatchData:
         self.mask_dst = None
         """ match result """
         self.matches_list = []  # list of matches, see FeatMatch.match_features
-        self.loss_list = []  # list of loss, ranging 0-1, see FeatMatch.match_features
+        self.cost_list = []  # list of cost, ranging 0-1, see FeatMatch.match_features
         self.uvs_src = []  # keypoints extracted from each source image
         self.uv_dst = None  # keypoints extracted from the destination image
         self.idx_best = None  # index of the best matches (longest)
-        self.mat_m2c = None # model to camera transformation matrix, 4x4
+        self.mat_m2c = None  # model to camera transformation matrix, 4x4
 
 
 def pose2mat(pose):
@@ -419,3 +421,80 @@ def vis_snapshots(snapshots):
     axis_mesh = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
     clds.append(axis_mesh)
     o3d.visualization.draw_geometries(clds)
+
+
+def plot_matches(img1, img2, uv1, uv2):
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
+    ax1.imshow(img1)
+    ax2.imshow(img2)
+    for pt1, pt2 in zip(uv1, uv2):
+        cir1 = patches.Circle(pt1, 5, color="red", fill=False)
+        cir2 = patches.Circle(pt2, 2, color="red", fill=False)
+        ax1.add_patch(cir1)
+        ax2.add_patch(cir2)
+        l = patches.ConnectionPatch(
+            xyA=pt1, xyB=pt2, axesA=ax1, axesB=ax2, coordsA="data", coordsB="data", color="green"
+        )
+        fig.add_artist(l)
+    fig.suptitle(f"matches: {len(uv1)}")
+    fig.tight_layout()
+    plt.show()
+    return
+
+
+def plot_keypoints(img1, img2, kp1, kp2, Mh12, thresh_des):
+    idx1 = -1
+    alts = []
+    idx2 = -1
+
+    def on_click_src(event):
+        nonlocal idx1, alts, idx2
+        if event.inaxes != ax1:
+            return
+        ax1.plot(kp1[idx1].pt[0], kp1[idx1].pt[1], "go", markersize=3)
+        for alt in alts:
+            ax2.plot(kp2[alt].pt[0], kp2[alt].pt[1], "go", markersize=3)
+        x, y = int(event.xdata), int(event.ydata)
+        distances = np.linalg.norm(np.array([k.pt for k in kp1]) - np.array([x, y]), axis=1)
+        idx1 = np.argmin(distances)
+        ax1.set_title(f"keypoints: {len(kp1)}, selected: {idx1}")
+        selected_kp = kp1[idx1]
+        ax1.plot(selected_kp.pt[0], selected_kp.pt[1], "ro", markersize=3)
+        dists = Mh12[idx1]
+        alts = np.where(dists < thresh_des)[0]
+        for alt in alts:
+            ax2.plot(kp2[alt].pt[0], kp2[alt].pt[1], "r*", markersize=3)
+        if idx2 != -1:
+            fig.suptitle(f"Hamming distance: {Mh12[idx1, idx2]}")
+        fig.canvas.draw()
+
+    def on_click_dst(event):
+        nonlocal idx1, idx2
+        if event.inaxes != ax2:
+            return
+        if idx2 != -1:
+            flag = "go" if idx2 not in alts else "ro"
+            ax2.plot(kp2[idx2].pt[0], kp2[idx2].pt[1], flag, markersize=3)
+        x, y = int(event.xdata), int(event.ydata)
+        distances = np.linalg.norm(np.array([k.pt for k in kp2]) - np.array([x, y]), axis=1)
+        idx2 = np.argmin(distances)
+        ax2.set_title(f"keypoints: {len(kp2)}, selected: {idx2}")
+        if idx1 != -1:
+            fig.suptitle(f"Hamming distance: {Mh12[idx1, idx2]}")
+        selected_kp = kp2[idx2]
+        ax2.plot(selected_kp.pt[0], selected_kp.pt[1], "bo", markersize=3)
+        fig.canvas.draw()
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
+    ax1.imshow(img1)
+    ax2.imshow(img2)
+    ax1.scatter([kp.pt[0] for kp in kp1], [kp.pt[1] for kp in kp1], c="g", s=3)
+    ax2.scatter([kp.pt[0] for kp in kp2], [kp.pt[1] for kp in kp2], c="g", s=3)
+    ax1.set_title(f"keypoints: {len(kp1)}")
+    ax2.set_title(f"keypoints: {len(kp2)}")
+    ax1.axis("off")
+    ax2.axis("off")
+    fig.tight_layout()
+    fig.canvas.mpl_connect("button_press_event", on_click_src)
+    fig.canvas.mpl_connect("button_press_event", on_click_dst)
+    plt.show()
