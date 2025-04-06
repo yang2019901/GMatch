@@ -23,22 +23,6 @@ def render(meta_data):
     util.save_snapshots(snapshots, meta_data.pt_path)
 
 
-def equalize_hist(imgs_src, img_dst, masks_src, mask_dst):
-    """equalize histogram
-    imgs_src: (N, H, W, 3), img_dst: (H, W, 3)
-    masks_src: (N, H, W), mask_dst: (H, W)
-    """
-    pix1 = imgs_src[masks_src != 0, :]
-    pix2 = img_dst[mask_dst != 0, :]
-    # convert to gray by weighted sum
-    y1 = 0.299 * pix1[:, 0] + 0.587 * pix1[:, 1] + 0.114 * pix1[:, 2]
-    y2 = 0.299 * pix2[:, 0] + 0.587 * pix2[:, 1] + 0.114 * pix2[:, 2]
-    k = np.mean(y1) / np.mean(y2)
-    print(f"Preprocess - equalize hist coeff: {k:.2f}")
-    rlt = cv2.multiply(img_dst, np.array([k, k, k]))
-    return rlt
-
-
 cache = {}
 
 
@@ -170,18 +154,10 @@ if __name__ == "__main__":
     meta_data = util.MetaData(proj_path=os.path.dirname(os.path.abspath(__file__)), dataset="hope")
     match_data = util.MatchData()
 
-    """ FeatMatch parameters override """
-    FeatMatch.N1 = 500
-    FeatMatch.N2 = 500
-    FeatMatch.N_good = 25
-    FeatMatch.D = 24
-    FeatMatch.thresh_des = 0.1
-    FeatMatch.thresh_cost = 0.08
-    FeatMatch.thresh_flip = 0.05
-
-    # meta_data.init(pt_id=22, scene_id=4, img_id=0, mask_id=19)
+    # meta_data.init(pt_id=23, scene_id=6, img_id=0, mask_id=1)
     # load(meta_data, match_data)
     # FeatMatch.match_features(match_data)
+    # print(f"obj: {meta_data.pt_id}, len: {len(match_data.matches_list[match_data.idx_best])}")
     # solve(match_data)
     # exit()
 
@@ -215,20 +191,10 @@ if __name__ == "__main__":
         img_id_last = line["im_id"]
         scene_id_last = line["scene_id"]
 
-    print("targets_list:", len(targets_list))
+    print("all images: ", len(targets_list))
 
-    # with open("result.csv", "r") as f:
-    #     lines = f.readlines()
-    # if len(lines) > 1:
-    #     scene_id_resume, img_id_resume = map(int, lines[-1].split(",")[:2])
-    # else:
-    #     scene_id_resume, img_id_resume = -1, -1
-
-    with open("result.csv", "a") as f:
+    with open("result.csv", "w") as f:
         for targets in targets_list:
-            # scene_id, img_id = targets[0][1], targets[0][2]
-            # if scene_id < scene_id_resume or (scene_id == scene_id_resume and img_id <= img_id_resume):
-            #     continue
             results = process_img(meta_data, match_data, targets)
             f.writelines(results)
             f.flush()
