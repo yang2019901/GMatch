@@ -18,7 +18,7 @@ N_good = 32  # number of good matches candidates
 D = 24  # max search depth
 thresh_des = 0.1  # threshold for descriptor distance, used to judge two descriptors' similarity
 thresh_cost = 0.08  # if the maximum cost of adding `m` to matches is less than this, accept `m`
-thresh_flip = 0  # threshold for flipover judgement
+thresh_flip = 0.05  # threshold for flipover judgement
 
 """ ORB settings """
 # detector = cv2.ORB_create()
@@ -87,6 +87,9 @@ def tree_search(pts1, pts2, Mh12):
         np.argpartition(np.reshape(Mh12, -1), N_good)[:N_good] if N_good < n1 * n2 else np.arange(n1 * n2, dtype=int)
     )
     good = np.array(np.unravel_index(part_indices, Mh12.shape)).T
+    pairs_simi = np.argwhere(Mh12 < thresh_des)
+    if len(pairs_simi) == 0:
+        return np.array([]), 1
 
     for i, j in good:
         matches.append((i, j))
@@ -94,16 +97,10 @@ def tree_search(pts1, pts2, Mh12):
         while True:
             if len(matches) == D:
                 break
-            dists = Mh12
-            ## filter with descriptor similarity
-            pairs = np.argwhere(dists < thresh_des)
-            if len(pairs) == 0:
-                break
-            pairs = np.column_stack((pairs[:, 0], pairs[:, 1]))  # (n, 2)
             ## filter with geometric cost
-            costs = cost(matches, pairs, Me11, Me22)  # (n, )
+            costs = cost(matches, pairs_simi, Me11, Me22)  # (n, )
             ind = np.argwhere(costs < thresh_cost).flatten()
-            pairs = pairs[ind]
+            pairs = pairs_simi[ind]
             costs = costs[ind]
             if len(pairs) == 0:
                 break
