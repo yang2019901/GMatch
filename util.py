@@ -61,8 +61,8 @@ class MatchData:
         self.cld_dst = None
         self.mask_dst = None
         """ match result """
-        self.matches_list = []  # list of matches, see FeatMatch.match_features
-        self.cost_list = []  # list of cost, ranging 0-1, see FeatMatch.match_features
+        self.matches_list = []  # list of matches, see gmatch.match_features
+        self.cost_list = []  # list of cost, ranging 0-1, see gmatch.match_features
         self.uvs_src = []  # keypoints extracted from each source image
         self.uv_dst = None  # keypoints extracted from the destination image
         self.idx_best = None  # index of the best matches (longest)

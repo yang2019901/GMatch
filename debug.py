@@ -2,12 +2,12 @@ import open3d as o3d
 import numpy as np
 import matplotlib.pyplot as plt
 import pickle, cv2
-import json, os.path, time
-import cProfile
+import os.path, time
 import copy
-
+from matplotlib import patches
 import gmatch
 import util
+import pdb
 
 
 def render(meta_data):
@@ -150,51 +150,76 @@ def process_img(meta_data: util.MetaData, match_data: util.MatchData, targets):
     return [f'{", ".join(rec)}, {timespan:.2f}\n' for rec in record_list]
 
 
+def costmat(matches, Me11, Me22):
+    tmp = np.array(matches)
+    dists1 = Me11[tmp[:, 0][:, np.newaxis], tmp[:, 0][np.newaxis, :]]  # (d, d)
+    dists2 = Me22[tmp[:, 1][:, np.newaxis], tmp[:, 1][np.newaxis, :]]  # (d, d)
+    mat = np.abs(np.divide(dists1 - dists2, dists1, out=np.zeros_like(dists1), where=dists1 != 0))
+    return mat
+
+
 if __name__ == "__main__":
+    np.set_printoptions(precision=3, suppress=True)
     meta_data = util.MetaData(proj_path=os.path.dirname(os.path.abspath(__file__)), dataset="hope")
     match_data = util.MatchData()
 
-    # meta_data.init(pt_id=23, scene_id=6, img_id=0, mask_id=1)
-    # load(meta_data, match_data)
-    # gmatch.match_features(match_data)
-    # print(f"obj: {meta_data.pt_id}, len: {len(match_data.matches_list[match_data.idx_best])}")
-    # solve(match_data)
-    # exit()
+    meta_data.init(pt_id=23, scene_id=6, img_id=0, mask_id=1)
+    load(meta_data, match_data)
 
-    """ bop19 test set """
-    with open("targets_manual_label.json", "r") as f:
-        content = json.load(f)
+    img_src, cld_src, mask_src = match_data.imgs_src[2], match_data.clds_src[2], match_data.masks_src[2]
+    img_dst, cld_dst, mask_dst = match_data.img_dst, match_data.cld_dst, match_data.mask_dst
+    kp_dst, des_dst = gmatch.detector.detectAndCompute(img_dst, mask_dst)
+    kp_src, des_src = gmatch.detector.detectAndCompute(img_src, mask_src)
+    uv_dst = np.array([k.pt for k in kp_dst], dtype=np.int32)
+    uv_src = np.array([k.pt for k in kp_src], dtype=np.int32)
+    ############################################################################
+    pts_dst = cld_dst[uv_dst[:, 1], uv_dst[:, 0]]
+    pts_src = cld_src[uv_src[:, 1], uv_src[:, 0]]
+    Me11 = np.linalg.norm(pts_src[:, np.newaxis, :] - pts_src, axis=-1)
+    Me22 = np.linalg.norm(pts_dst[:, np.newaxis, :] - pts_dst, axis=-1)
+    """ L1-normalized SIFT """
+    des_src = des_src / np.sum(des_src, axis=-1, keepdims=True)
+    des_dst = des_dst / np.sum(des_dst, axis=-1, keepdims=True)
+    Mh12 = np.linalg.norm(des_src[:, np.newaxis, :] - des_dst[np.newaxis, :, :], axis=-1)
+    pairs_simi = np.argwhere(Mh12 < gmatch.thresh_des)
 
-    img_id_last, scene_id_last = None, None
-    num_dup = 0
-    objs_id = []
-    targets = []
-    targets_list = []
-    ## Obs1: mask_id starts from 0
-    ## Obs2: in test_targets_bop19.json, the order of obj_id is just the same as mask file suffix order (aka, mask_id, here)
-    for _, line in enumerate(content):
-        if img_id_last is None:
-            img_id_last = line["im_id"]
-        if line["im_id"] != img_id_last:
-            n = len(targets)
-            targets += [(mask_id, scene_id_last, img_id_last, objs_id) for mask_id in range(n, n + num_dup)]
-            targets_list.append(targets)
-            num_dup = 0
-            objs_id = []
-            targets = []
-        ## instance count > 1, add it to candidates `objs_id`
-        if line["inst_count"] > 1:
-            num_dup += line["inst_count"] - 1
-            objs_id.append(line["obj_id"])
-        targets.append((len(targets), line["scene_id"], line["im_id"], [line["obj_id"]]))
-
-        img_id_last = line["im_id"]
-        scene_id_last = line["scene_id"]
-
-    print("all images: ", len(targets_list))
-
-    with open("result.csv", "w") as f:
-        for targets in targets_list:
-            results = process_img(meta_data, match_data, targets)
-            f.writelines(results)
-            f.flush()
+    m = [[372,130], [28,24]]
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
+    ax1.imshow(img_src)
+    ax2.imshow(img_dst)
+    ax1.axis("off")
+    ax2.axis("off")
+    fig.tight_layout()
+    plt.ion()
+    print("###################################################################")
+    print("Enter debug mode, modify `matches` and press 'c' to update the plot")
+    print("###################################################################")
+    add = lambda idx1, idx2: m.append([idx1, idx2])
+    has = lambda idx1, idx2: print(np.all(pairs_simi == np.array([idx1, idx2]), axis=1).any())
+    find = lambda idx1, idx2: print(np.argwhere((np.array(pairs_simi) == np.array([idx1, idx2])).all(axis=1)).item())
+    while True:
+        for patch in ax1.patches:
+            patch.remove()
+        for patch in ax2.patches:
+            patch.remove()
+        for artist in list(fig.artists):
+            artist.remove()
+        for pair in m:
+            pt1 = uv_src[pair[0], :]
+            pt2 = uv_dst[pair[1], :]
+            cir1 = patches.Circle(pt1, 3, color="red", fill=False)
+            cir2 = patches.Circle(pt2, 1, color="red", fill=False)
+            ax1.add_patch(cir1)
+            ax2.add_patch(cir2)
+            l = patches.ConnectionPatch(
+                xyA=pt1, xyB=pt2, axesA=ax1, axesB=ax2, coordsA="data", coordsB="data", color="green"
+            )
+            fig.add_artist(l)
+        plt.draw()
+        print(">>>>>>>>>>>>>>>>>>>>")
+        print(f"matches (length {len(m)}):\n{m}")
+        Mc = costmat(m, Me11, Me22) if len(m) > 0 else np.zeros((0, 0))
+        print(f"costmat:\n{Mc}")
+        print("<<<<<<<<<<<<<<<<<<<<")
+        plt.pause(0.1)
+        pdb.set_trace()

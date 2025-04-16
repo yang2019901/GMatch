@@ -4,6 +4,7 @@ import numpy as np
 import cv2
 import util
 import time
+import matplotlib.pyplot as plt
 
 
 HAM_TAB = np.array(
@@ -18,7 +19,7 @@ N_good = 32  # number of good matches candidates
 D = 24  # max search depth
 thresh_des = 0.1  # threshold for descriptor distance, used to judge two descriptors' similarity
 thresh_cost = 0.08  # if the maximum cost of adding `m` to matches is less than this, accept `m`
-thresh_flip = 0.05  # threshold for flipover judgement
+thresh_flip = 0.01  # threshold for flipover judgement
 
 """ ORB settings """
 # detector = cv2.ORB_create()
@@ -67,31 +68,49 @@ def flipover(matches, pairs, pts1, pts2):
     global thresh_flip
     if len(matches) < 2:
         return np.zeros(len(pairs), dtype=bool)
-    v1 = pts1[matches[-2][0]] - pts1[matches[-1][0]]
-    v1_ = pts1[pairs[:, 0]] - pts1[matches[-1][0]]
-    v2 = pts2[matches[-2][1]] - pts2[matches[-1][1]]
-    v2_ = pts2[pairs[:, 1]] - pts2[matches[-1][1]]
-    n1 = np.cross(v1, v1_) / np.linalg.norm(v1) / np.linalg.norm(v1_)
-    n2 = np.cross(v2, v2_) / np.linalg.norm(v2) / np.linalg.norm(v2_)
+    v1_1 = pts1[matches[-2][0]] - pts1[matches[-1][0]]
+    v1_2 = pts1[pairs[:, 0]] - pts1[matches[-1][0]]
+    v2_1 = pts2[matches[-2][1]] - pts2[matches[-1][1]]
+    v2_2 = pts2[pairs[:, 1]] - pts2[matches[-1][1]]
+    n1 = np.cross(v1_1, v1_2) / np.linalg.norm(v1_1) / np.linalg.norm(v1_2)
+    n2 = np.cross(v2_1, v2_2) / np.linalg.norm(v2_1) / np.linalg.norm(v2_2)
     flags = np.bitwise_and(n1[:, 2] * n2[:, 2] < 0, np.abs(n1[:, 2] - n2[:, 2]) > thresh_flip)
     return flags
 
 
-def tree_search(pts1, pts2, Mh12):
+def volume_equal(matches, pairs, pts1, pts2):
+    """pairs: (n, 2), return (n, ) boolean array"""
+    if len(matches) < 3:
+        return np.ones(len(pairs), dtype=bool)
+    m = matches  # alias
+    S1 = np.cross(pts1[m[0][0]] - pts1[m[-1][0]], pts1[m[0][0]] - pts1[m[-2][0]])
+    S2 = np.cross(pts2[m[0][1]] - pts2[m[-1][1]], pts2[m[0][1]] - pts2[m[-2][1]])
+    v1 = pts1[pairs[:, 0]] - pts1[m[0][0]]  # (n, 3)
+    v2 = pts2[pairs[:, 1]] - pts2[m[0][1]]  # (n, 3)
+    V1 = np.sum(S1 * v1, axis=-1)  # (n, )
+    V2 = np.sum(S2 * v2, axis=-1)  # (n, )
+    flags = np.abs(V1 - V2) < 1e-5  # unit: m^3
+    return flags
+
+
+def tree_search(pts1, pts2, Mh12, **dbg):
     n1, n2 = Mh12.shape
     matches = []
     rlt = []
     Me11 = np.linalg.norm(pts1[:, np.newaxis, :] - pts1, axis=-1)
     Me22 = np.linalg.norm(pts2[:, np.newaxis, :] - pts2, axis=-1)
+
     part_indices = (
         np.argpartition(np.reshape(Mh12, -1), N_good)[:N_good] if N_good < n1 * n2 else np.arange(n1 * n2, dtype=int)
     )
-    good = np.array(np.unravel_index(part_indices, Mh12.shape)).T
+    pairs_good = np.array(np.unravel_index(part_indices, Mh12.shape)).T
+    # pairs_good = np.argwhere(Mh12 < 0.1)
+
     pairs_simi = np.argwhere(Mh12 < thresh_des)
     if len(pairs_simi) == 0:
         return np.array([]), 1
 
-    for i, j in good:
+    for i, j in pairs_good:
         matches.append((i, j))
         ## step(), search for the next match
         while True:
@@ -104,7 +123,7 @@ def tree_search(pts1, pts2, Mh12):
             costs = costs[ind]
             if len(pairs) == 0:
                 break
-            flags = ~flipover(matches, pairs, pts1, pts2)
+            flags = ~flipover(matches, pairs, pts1, pts2)  # (n, )
             pairs = pairs[flags]
             costs = costs[flags]
             if len(pairs) == 0:
@@ -178,7 +197,7 @@ def match_features(match_data: util.MatchData, cache_id=None):
         # global thresh_des
         # util.plot_keypoints(img_src, img_dst, kp_src, kp_dst, Mh12, thresh_des)
 
-        matches, cost = tree_search(pts_src, pts_dst, Mh12)
+        matches, cost = tree_search(pts_src, pts_dst, Mh12, img1=img_src, img2=img_dst, kp1=kp_src, kp2=kp_dst)
         matches_list.append((matches, cost))
         if len(matches) == D:
             break
