@@ -6,7 +6,7 @@ import os
 import json
 
 import matplotlib.pyplot as plt
-from matplotlib import patches
+from matplotlib import patches, collections
 from scipy.spatial.transform import Rotation
 
 
@@ -442,56 +442,58 @@ def plot_matches(img1, img2, uv1, uv2):
     return
 
 
-def plot_keypoints(img1, img2, kp1, kp2, Mh12, thresh_des):
+def plot_keypoints(img1, img2, uv1, uv2, Mh12, thresh_des):
     idx1 = -1
     alts = []
     idx2 = -1
+
+    R, G, B = [1, 0, 0, 1], [0, 0.5, 0, 1], [0, 0, 1, 1]
 
     def on_click_src(event):
         nonlocal idx1, alts, idx2
         if event.inaxes != ax1:
             return
-        ax1.plot(kp1[idx1].pt[0], kp1[idx1].pt[1], "go", markersize=3)
-        for alt in alts:
-            ax2.plot(kp2[alt].pt[0], kp2[alt].pt[1], "go", markersize=3)
+        clr1[idx1] = G
+        clr2[alts] = G
         x, y = int(event.xdata), int(event.ydata)
-        distances = np.linalg.norm(np.array([k.pt for k in kp1]) - np.array([x, y]), axis=1)
+        distances = np.linalg.norm(uv1 - np.array([x, y]), axis=1)
         idx1 = np.argmin(distances)
-        ax1.set_title(f"keypoints: {len(kp1)}, selected: {idx1}")
-        selected_kp = kp1[idx1]
-        ax1.plot(selected_kp.pt[0], selected_kp.pt[1], "ro", markersize=3)
+        ax1.set_title(f"keypoints: {len(uv1)}, selected: {idx1}")
+        clr1[idx1] = R
         dists = Mh12[idx1]
         alts = np.where(dists < thresh_des)[0]
-        for alt in alts:
-            ax2.plot(kp2[alt].pt[0], kp2[alt].pt[1], "r*", markersize=3)
+        clr2[alts] = R
         if idx2 != -1:
-            fig.suptitle(f"Hamming distance: {Mh12[idx1, idx2]}")
+            fig.suptitle(f"descriptor distance: {Mh12[idx1, idx2]}")
+        scat1.set_facecolor(clr1)
+        scat2.set_facecolor(clr2)
         fig.canvas.draw()
 
     def on_click_dst(event):
-        nonlocal idx1, idx2
+        nonlocal idx1, idx2, alts
         if event.inaxes != ax2:
             return
         if idx2 != -1:
-            flag = "go" if idx2 not in alts else "ro"
-            ax2.plot(kp2[idx2].pt[0], kp2[idx2].pt[1], flag, markersize=3)
+            clr2[idx2] = G if idx2 not in alts else R
         x, y = int(event.xdata), int(event.ydata)
-        distances = np.linalg.norm(np.array([k.pt for k in kp2]) - np.array([x, y]), axis=1)
+        distances = np.linalg.norm(uv2 - np.array([x, y]), axis=1)
         idx2 = np.argmin(distances)
-        ax2.set_title(f"keypoints: {len(kp2)}, selected: {idx2}")
+        clr2[idx2] = B
+        ax2.set_title(f"keypoints: {len(uv2)}, selected: {idx2}")
         if idx1 != -1:
-            fig.suptitle(f"Hamming distance: {Mh12[idx1, idx2]}")
-        selected_kp = kp2[idx2]
-        ax2.plot(selected_kp.pt[0], selected_kp.pt[1], "bo", markersize=3)
+            fig.suptitle(f"descriptor distance: {Mh12[idx1, idx2]}")
+        scat2.set_facecolor(clr2)
         fig.canvas.draw()
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
     ax1.imshow(img1)
     ax2.imshow(img2)
-    ax1.scatter([kp.pt[0] for kp in kp1], [kp.pt[1] for kp in kp1], c="g", s=3)
-    ax2.scatter([kp.pt[0] for kp in kp2], [kp.pt[1] for kp in kp2], c="g", s=3)
-    ax1.set_title(f"keypoints: {len(kp1)}")
-    ax2.set_title(f"keypoints: {len(kp2)}")
+    clr1 = np.array([G for _ in range(len(uv1))])
+    clr2 = np.array([G for _ in range(len(uv2))])
+    scat1: collections.PathCollection = ax1.scatter(uv1[:, 0], uv1[:, 1], c=clr1, s=3)
+    scat2: collections.PathCollection = ax2.scatter(uv2[:, 0], uv2[:, 1], c=clr2, s=3)
+    ax1.set_title(f"keypoints: {len(uv1)}")
+    ax2.set_title(f"keypoints: {len(uv2)}")
     ax1.axis("off")
     ax2.axis("off")
     fig.tight_layout()
