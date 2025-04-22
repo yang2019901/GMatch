@@ -154,12 +154,12 @@ if __name__ == "__main__":
     meta_data = util.MetaData(proj_path=os.path.dirname(os.path.abspath(__file__)), dataset="hope")
     match_data = util.MatchData()
 
-    # meta_data.init(pt_id=23, scene_id=6, img_id=0, mask_id=1)
-    # load(meta_data, match_data)
-    # gmatch.match_features(match_data)
-    # print(f"obj: {meta_data.pt_id}, len: {len(match_data.matches_list[match_data.idx_best])}")
-    # solve(match_data)
-    # exit()
+    meta_data.init(pt_id=23, scene_id=6, img_id=0, mask_id=1)
+    load(meta_data, match_data)
+    gmatch.match_features(match_data)
+    print(f"obj: {meta_data.pt_id}, len: {len(match_data.matches_list[match_data.idx_best])}")
+    solve(match_data)
+    exit()
 
     """ bop19 test set """
     with open("targets_manual_label.json", "r") as f:

@@ -6,6 +6,9 @@ import util
 import time
 import matplotlib.pyplot as plt
 
+from lightglue import SuperPoint, DISK
+from lightglue.utils import numpy_image_to_torch
+
 
 HAM_TAB = np.array(
     [bin(i).count("1") for i in range(256)], dtype=np.uint8
@@ -13,13 +16,12 @@ HAM_TAB = np.array(
 CACHE = {}
 
 """ SIFT settings """
-detector: cv2.SIFT = cv2.SIFT_create()
-detector.setContrastThreshold(0.03)
-N_good = 32  # number of good matches candidates
-D = 24  # max search depth
-thresh_des = 0.1  # threshold for descriptor distance, used to judge two descriptors' similarity
-thresh_cost = 0.08  # if the maximum cost of adding `m` to matches is less than this, accept `m`
-thresh_flip = 0.01  # threshold for flipover judgement
+# detector: cv2.SIFT = cv2.SIFT_create()
+# detector.setContrastThreshold(0.03)
+# N_good = 32  # number of good matches candidates
+# D = 24  # max search depth
+# thresh_des = 0.1  # threshold for descriptor distance, used to judge two descriptors' similarity
+# thresh_cost = 0.08  # if the maximum cost of adding `m` to matches is less than this, accept `m`
 
 """ ORB settings """
 # detector = cv2.ORB_create()
@@ -29,6 +31,14 @@ thresh_flip = 0.01  # threshold for flipover judgement
 # D = 24  # max search depth
 # thresh_des = 100  # threshold for descriptor distance, used to judge two descriptors' similarity
 # thresh_cost = 0.08  # if the maximum cost of adding `m` to matches is less than this, accept `m`
+
+""" SuperPoint settings """
+detector: SuperPoint = SuperPoint(max_num_keypoints=512).eval()
+N_good = 32  # number of good matches candidates
+D = 24  # max search depth
+thresh_des = 1.25  # threshold for descriptor distance, used to judge two descriptors' similarity
+thresh_cost = 0.08  # if the maximum cost of adding `m` to matches is less than this, accept `m`
+thresh_flip = 0.01  # threshold for flipover judgement
 
 
 def GetHamMat(des1, des2):
@@ -148,6 +158,13 @@ def tree_search(pts1, pts2, Mh12, **dbg):
         return np.array(rlt), np.max(diff).item()
 
 
+def SPP_detect(img, mask):
+    global detector
+    tmp = (img * (mask[:, :, np.newaxis] > 0)).astype(np.uint8)
+    feat = detector.extract(numpy_image_to_torch(tmp))
+    return feat["keypoints"].cpu().numpy().astype(np.int32).squeeze(), feat["descriptors"].cpu().numpy().squeeze()
+
+
 def match_features(match_data: util.MatchData, cache_id=None):
     """match imgs_src and img_dst in match_data and store the result in it
     imgs_src, clds_src: (N, H, W, 3)
@@ -158,11 +175,12 @@ def match_features(match_data: util.MatchData, cache_id=None):
     """ load from match_data """
     imgs_src, clds_src, masks_src = match_data.imgs_src, match_data.clds_src, match_data.masks_src
     img_dst, cld_dst, mask_dst = match_data.img_dst, match_data.cld_dst, match_data.mask_dst
-    kp_dst, des_dst = detector.detectAndCompute(img_dst, mask_dst)
-    if len(kp_dst) == 0:
+    # kp_dst, des_dst = detector.detectAndCompute(img_dst, mask_dst)
+    uv_dst, des_dst = SPP_detect(img_dst, mask_dst)
+
+    if len(uv_dst) == 0:
         print("No keypoints found in img2")
         return
-    uv_dst = np.array([k.pt for k in kp_dst], dtype=np.int32)
     pts_dst = cld_dst[uv_dst[:, 1], uv_dst[:, 0]]
 
     """ find the keypoints and descriptors with detector """
@@ -171,23 +189,24 @@ def match_features(match_data: util.MatchData, cache_id=None):
     matches_list = []
     uvs_src = []
     for i, (img_src, cld_src, mask_src) in enumerate(zip(imgs_src, clds_src, masks_src)):
-        kp_src, des_src = (
-            CACHE[(cache_id, i)] if (cache_id, i) in CACHE else detector.detectAndCompute(img_src, mask_src)
-        )
+        # kp_src, des_src = (
+        #     CACHE[(cache_id, i)] if (cache_id, i) in CACHE else detector.detectAndCompute(img_src, mask_src)
+        # )
+        uv_src, des_src = CACHE[(cache_id, i)] if (cache_id, i) in CACHE else SPP_detect(img_src, mask_src)
 
         if cache_id is not None:
-            CACHE[(cache_id, i)] = (kp_src, des_src)
+            CACHE[(cache_id, i)] = (uv_src, des_src)
 
-        if len(kp_src) == 0:
+        if len(uv_src) == 0:
             matches_list.append(([], 1))
             continue
-        uv_src = np.array([k.pt for k in kp_src], dtype=np.int32)
         pts_src = cld_src[uv_src[:, 1], uv_src[:, 0]]
         uvs_src.append(uv_src)
 
-        """ L1-normalized SIFT """
-        des_src = des_src / np.sum(des_src, axis=-1, keepdims=True)
-        des_dst = des_dst / np.sum(des_dst, axis=-1, keepdims=True)
+        # """ L1-normalized SIFT """
+        # des_src = des_src / np.sum(des_src, axis=-1, keepdims=True)
+        # des_dst = des_dst / np.sum(des_dst, axis=-1, keepdims=True)
+        # Mh12 = np.linalg.norm(des_src[:, np.newaxis, :] - des_dst[np.newaxis, :, :], axis=-1)
         Mh12 = np.linalg.norm(des_src[:, np.newaxis, :] - des_dst[np.newaxis, :, :], axis=-1)
 
         """ <Tune>
@@ -195,9 +214,9 @@ def match_features(match_data: util.MatchData, cache_id=None):
             thresh_des: find a suitable threshold for descriptor distance
         """
         # global thresh_des
-        # util.plot_keypoints(img_src, img_dst, kp_src, kp_dst, Mh12, thresh_des)
+        # util.plot_keypoints(img_src, img_dst, uv_src, uv_dst, Mh12, thresh_des)
 
-        matches, cost = tree_search(pts_src, pts_dst, Mh12, img1=img_src, img2=img_dst, kp1=kp_src, kp2=kp_dst)
+        matches, cost = tree_search(pts_src, pts_dst, Mh12)
         matches_list.append((matches, cost))
         if len(matches) == D:
             break
