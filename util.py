@@ -442,7 +442,7 @@ def plot_matches(img1, img2, uv1, uv2):
     return
 
 
-def plot_keypoints(img1, img2, uv1, uv2, Mh12, thresh_des):
+def plot_keypoints(img1, img2, uv1, uv2, Mf12, thresh_des):
     idx1 = -1
     alts = []
     idx2 = -1
@@ -460,11 +460,11 @@ def plot_keypoints(img1, img2, uv1, uv2, Mh12, thresh_des):
         idx1 = np.argmin(distances)
         ax1.set_title(f"keypoints: {len(uv1)}, selected: {idx1}")
         clr1[idx1] = R
-        dists = Mh12[idx1]
+        dists = Mf12[idx1]
         alts = np.where(dists < thresh_des)[0]
         clr2[alts] = R
         if idx2 != -1:
-            fig.suptitle(f"descriptor distance: {Mh12[idx1, idx2]}")
+            fig.suptitle(f"descriptor distance: {Mf12[idx1, idx2]}")
         scat1.set_facecolor(clr1)
         scat2.set_facecolor(clr2)
         fig.canvas.draw()
@@ -481,7 +481,7 @@ def plot_keypoints(img1, img2, uv1, uv2, Mh12, thresh_des):
         clr2[idx2] = B
         ax2.set_title(f"keypoints: {len(uv2)}, selected: {idx2}")
         if idx1 != -1:
-            fig.suptitle(f"descriptor distance: {Mh12[idx1, idx2]}")
+            fig.suptitle(f"descriptor distance: {Mf12[idx1, idx2]}")
         scat2.set_facecolor(clr2)
         fig.canvas.draw()
 

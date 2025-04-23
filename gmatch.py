@@ -31,7 +31,7 @@ thresh_flip = 0.01  # threshold for flipover judgement
 # thresh_cost = 0.08  # if the maximum cost of adding `m` to matches is less than this, accept `m`
 
 
-def GetHamMat(des1, des2):
+def ham_mat(des1, des2):
     """compute hamming distance matrix `Mh` between two descriptors
     Mh[i, j] == HamDist(des1[i], des2[j])
     """
@@ -49,7 +49,7 @@ def GetHamMat(des1, des2):
 
 
 def cost(matches, pairs, Me11, Me22):
-    """geometric cost function
+    """cost function for distance matrix
     matches: (d, 2), pairs: (n, 2), Me11: (n1, n1), Me22: (n2, n2)
     """
     if len(matches) == 0:
@@ -64,7 +64,8 @@ def cost(matches, pairs, Me11, Me22):
 
 
 def flipover(matches, pairs, pts1, pts2):
-    """pairs: (n, 2), return (n, ) boolean array"""
+    """flipover judgement
+    pairs: (n, 2), return (n, ) boolean array"""
     global thresh_flip
     if len(matches) < 2:
         return np.zeros(len(pairs), dtype=bool)
@@ -78,35 +79,21 @@ def flipover(matches, pairs, pts1, pts2):
     return flags
 
 
-def volume_equal(matches, pairs, pts1, pts2):
-    """pairs: (n, 2), return (n, ) boolean array"""
-    if len(matches) < 3:
-        return np.ones(len(pairs), dtype=bool)
-    m = matches  # alias
-    S1 = np.cross(pts1[m[0][0]] - pts1[m[-1][0]], pts1[m[0][0]] - pts1[m[-2][0]])
-    S2 = np.cross(pts2[m[0][1]] - pts2[m[-1][1]], pts2[m[0][1]] - pts2[m[-2][1]])
-    v1 = pts1[pairs[:, 0]] - pts1[m[0][0]]  # (n, 3)
-    v2 = pts2[pairs[:, 1]] - pts2[m[0][1]]  # (n, 3)
-    V1 = np.sum(S1 * v1, axis=-1)  # (n, )
-    V2 = np.sum(S2 * v2, axis=-1)  # (n, )
-    flags = np.abs(V1 - V2) < 1e-5  # unit: m^3
-    return flags
-
-
-def tree_search(pts1, pts2, Mh12, **dbg):
-    n1, n2 = Mh12.shape
+def search(pts1, pts2, Mf12):
+    """search and backtracking with geometric constraints (distance matrix and flip-over removal)"""
+    n1, n2 = Mf12.shape
     matches = []
     rlt = []
     Me11 = np.linalg.norm(pts1[:, np.newaxis, :] - pts1, axis=-1)
     Me22 = np.linalg.norm(pts2[:, np.newaxis, :] - pts2, axis=-1)
 
     part_indices = (
-        np.argpartition(np.reshape(Mh12, -1), N_good)[:N_good] if N_good < n1 * n2 else np.arange(n1 * n2, dtype=int)
+        np.argpartition(np.reshape(Mf12, -1), N_good)[:N_good] if N_good < n1 * n2 else np.arange(n1 * n2, dtype=int)
     )
-    pairs_good = np.array(np.unravel_index(part_indices, Mh12.shape)).T
-    # pairs_good = np.argwhere(Mh12 < 0.1)
+    pairs_good = np.array(np.unravel_index(part_indices, Mf12.shape)).T
+    # pairs_good = np.argwhere(Mf12 < 0.1)
 
-    pairs_simi = np.argwhere(Mh12 < thresh_des)
+    pairs_simi = np.argwhere(Mf12 < thresh_des)
     if len(pairs_simi) == 0:
         return np.array([]), 1
 
@@ -148,10 +135,11 @@ def tree_search(pts1, pts2, Mh12, **dbg):
         return np.array(rlt), np.max(diff).item()
 
 
-def match_features(match_data: util.MatchData, cache_id=None):
-    """match imgs_src and img_dst in match_data and store the result in it
+def Match(match_data: util.MatchData, cache_id=None):
+    """match each of imgs_src with img_dst in match_data and store the result in it;
+        keypoints and descriptors for imgs_src will be cached with cache_id if provided
     imgs_src, clds_src: (N, H, W, 3)
-    img_dst, cld_dst: (H, W, 3), (H, W, 3)
+    img_dst, cld_dst: (H, W, 3)
     """
     global detector, CACHE
     assert len(match_data.imgs_src) > 0, "imgs_src is empty"
@@ -188,16 +176,16 @@ def match_features(match_data: util.MatchData, cache_id=None):
         """ L1-normalized SIFT """
         des_src = des_src / np.sum(des_src, axis=-1, keepdims=True)
         des_dst = des_dst / np.sum(des_dst, axis=-1, keepdims=True)
-        Mh12 = np.linalg.norm(des_src[:, np.newaxis, :] - des_dst[np.newaxis, :, :], axis=-1)
+        Mf12 = np.linalg.norm(des_src[:, np.newaxis, :] - des_dst[np.newaxis, :, :], axis=-1)
 
         """ <Tune>
             N1 and N2: plot to see whether keypoints are enough
             thresh_des: find a suitable threshold for descriptor distance
         """
         # global thresh_des
-        # util.plot_keypoints(img_src, img_dst, kp_src, kp_dst, Mh12, thresh_des)
+        # util.plot_keypoints(img_src, img_dst, uv_src, uv_dst, Mf12, thresh_des)
 
-        matches, cost = tree_search(pts_src, pts_dst, Mh12, img1=img_src, img2=img_dst, kp1=kp_src, kp2=kp_dst)
+        matches, cost = search(pts_src, pts_dst, Mf12)
         matches_list.append((matches, cost))
         if len(matches) == D:
             break

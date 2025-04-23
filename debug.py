@@ -137,7 +137,7 @@ def process_img(meta_data: util.MetaData, match_data: util.MatchData, targets):
         for obj_id in obj_ids:
             meta_data.init(pt_id=obj_id, scene_id=scene_id, img_id=img_id, mask_id=mask_id)
             load(meta_data, match_data)
-            gmatch.match_features(match_data, meta_data.pt_id)
+            gmatch.Match(match_data, meta_data.pt_id)
             print(f"\tobj: {meta_data.pt_id}, len: {len(match_data.matches_list[match_data.idx_best])}")
             match_data_list.append(copy.copy(match_data))
         ## take the object with the most matches
@@ -180,8 +180,8 @@ if __name__ == "__main__":
     """ L1-normalized SIFT """
     des_src = des_src / np.sum(des_src, axis=-1, keepdims=True)
     des_dst = des_dst / np.sum(des_dst, axis=-1, keepdims=True)
-    Mh12 = np.linalg.norm(des_src[:, np.newaxis, :] - des_dst[np.newaxis, :, :], axis=-1)
-    pairs_simi = np.argwhere(Mh12 < gmatch.thresh_des)
+    Mf12 = np.linalg.norm(des_src[:, np.newaxis, :] - des_dst[np.newaxis, :, :], axis=-1)
+    pairs_simi = np.argwhere(Mf12 < gmatch.thresh_des)
 
     m = [[372,130], [28,24]]
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
