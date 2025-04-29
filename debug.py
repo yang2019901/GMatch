@@ -163,7 +163,7 @@ if __name__ == "__main__":
     meta_data = util.MetaData(proj_path=os.path.dirname(os.path.abspath(__file__)), dataset="hope")
     match_data = util.MatchData()
 
-    meta_data.init(pt_id=23, scene_id=6, img_id=0, mask_id=1)
+    meta_data.init(pt_id=4, scene_id=1, img_id=0, mask_id=7)
     load(meta_data, match_data)
 
     img_src, cld_src, mask_src = match_data.imgs_src[2], match_data.clds_src[2], match_data.masks_src[2]
@@ -183,7 +183,7 @@ if __name__ == "__main__":
     Mf12 = np.linalg.norm(des_src[:, np.newaxis, :] - des_dst[np.newaxis, :, :], axis=-1)
     pairs_simi = np.argwhere(Mf12 < gmatch.thresh_des)
 
-    m = [[372,130], [28,24]]
+    m = [(93, 158), (58, 111), (114, 172)]
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
     ax1.imshow(img_src)
     ax2.imshow(img_dst)

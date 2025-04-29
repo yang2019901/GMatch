@@ -19,7 +19,7 @@ N_good = 32  # number of good matches candidates
 D = 24  # max search depth
 thresh_des = 0.1  # threshold for descriptor distance, used to judge two descriptors' similarity
 thresh_cost = 0.08  # if the maximum cost of adding `m` to matches is less than this, accept `m`
-thresh_flip = 0.01  # threshold for flipover judgement
+thresh_flip = 0.8  # threshold for flipover judgement
 
 """ ORB settings """
 # detector = cv2.ORB_create()
@@ -63,6 +63,22 @@ def cost(matches, pairs, Me11, Me22):
     return res
 
 
+def volume_equal(matches, pairs, pts1, pts2):
+    """pairs: (n, 2), return (n, ) boolean array"""
+    if len(matches) < 3:
+        return np.ones(len(pairs), dtype=bool)
+    m = matches  # alias
+    S1 = np.cross(pts1[m[0][0]] - pts1[m[-1][0]], pts1[m[0][0]] - pts1[m[-2][0]])
+    S2 = np.cross(pts2[m[0][1]] - pts2[m[-1][1]], pts2[m[0][1]] - pts2[m[-2][1]])
+    v1 = pts1[pairs[:, 0]] - pts1[m[0][0]]  # (n, 3)
+    v2 = pts2[pairs[:, 1]] - pts2[m[0][1]]  # (n, 3)
+    V1 = np.sum(S1 * v1, axis=-1)  # (n, )
+    V2 = np.sum(S2 * v2, axis=-1)  # (n, )
+    flags = np.abs(V1 - V2) < 1e-5  # unit: m^3
+    return flags
+
+
+import warnings; warnings.simplefilter("error")
 def flipover(matches, pairs, pts1, pts2):
     """flipover judgement
     pairs: (n, 2), return (n, ) boolean array"""
@@ -73,8 +89,11 @@ def flipover(matches, pairs, pts1, pts2):
     v1_2 = pts1[pairs[:, 0]] - pts1[matches[-1][0]]
     v2_1 = pts2[matches[-2][1]] - pts2[matches[-1][1]]
     v2_2 = pts2[pairs[:, 1]] - pts2[matches[-1][1]]
-    n1 = np.cross(v1_1, v1_2) / np.linalg.norm(v1_1) / np.linalg.norm(v1_2)
-    n2 = np.cross(v2_1, v2_2) / np.linalg.norm(v2_1) / np.linalg.norm(v2_2)
+    n1, n2 = np.cross(v1_1, v1_2), np.cross(v2_1, v2_2)
+    n1 = np.divide(n1, np.linalg.norm(n1, axis=-1, keepdims=True), out=np.zeros_like(n1), where=n1 != 0)
+    n2 = np.divide(n2, np.linalg.norm(n2, axis=-1, keepdims=True), out=np.zeros_like(n2), where=n2 != 0)
+    # n1 = np.cross(v1_1, v1_2) / np.linalg.norm(v1_1) / np.linalg.norm(v1_2)
+    # n2 = np.cross(v2_1, v2_2) / np.linalg.norm(v2_1) / np.linalg.norm(v2_2)
     flags = np.bitwise_and(n1[:, 2] * n2[:, 2] < 0, np.abs(n1[:, 2] - n2[:, 2]) > thresh_flip)
     return flags
 
@@ -84,6 +103,7 @@ def search(pts1, pts2, Mf12):
     n1, n2 = Mf12.shape
     matches = []
     rlt = []
+    rlt_cost = 1
     Me11 = np.linalg.norm(pts1[:, np.newaxis, :] - pts1, axis=-1)
     Me22 = np.linalg.norm(pts2[:, np.newaxis, :] - pts2, axis=-1)
 
@@ -99,6 +119,7 @@ def search(pts1, pts2, Mf12):
 
     for i, j in pairs_good:
         matches.append((i, j))
+        c = 0
         ## step(), search for the next match
         while True:
             if len(matches) == D:
@@ -117,22 +138,18 @@ def search(pts1, pts2, Mf12):
                 break
             ## get the best match
             best = np.argmin(costs)
+            c = max(c, costs[best])
             matches.append(tuple(pairs[best]))
 
         if len(matches) > len(rlt):
             rlt = matches
+            rlt_cost = c
         matches = []
         if len(rlt) == D:
             break
 
     rlt = np.asarray(rlt)
-    if len(rlt) < 3:
-        return np.array([]), 1
-    else:
-        dists1 = Me11[rlt[:, 0][:, np.newaxis], rlt[:, 0][np.newaxis, :]]  # (d, d)
-        dists2 = Me22[rlt[:, 1][:, np.newaxis], rlt[:, 1][np.newaxis, :]]  # (d, d)
-        diff = np.abs(np.divide(dists1 - dists2, dists1, out=np.zeros_like(dists1), where=dists1 != 0))
-        return np.array(rlt), np.max(diff).item()
+    return (rlt, rlt_cost) if len(rlt) >= 3 else (np.array([]), 1)
 
 
 def Match(match_data: util.MatchData, cache_id=None):
