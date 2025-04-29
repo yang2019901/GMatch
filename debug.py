@@ -137,7 +137,7 @@ def process_img(meta_data: util.MetaData, match_data: util.MatchData, targets):
         for obj_id in obj_ids:
             meta_data.init(pt_id=obj_id, scene_id=scene_id, img_id=img_id, mask_id=mask_id)
             load(meta_data, match_data)
-            gmatch.match_features(match_data, meta_data.pt_id)
+            gmatch.match(match_data, meta_data.pt_id)
             print(f"\tobj: {meta_data.pt_id}, len: {len(match_data.matches_list[match_data.idx_best])}")
             match_data_list.append(copy.copy(match_data))
         ## take the object with the most matches

@@ -15,23 +15,6 @@ HAM_TAB = np.array(
 )  # used to compute hamming distance, only ORB uses it now
 CACHE = {}
 
-""" SIFT settings """
-# detector: cv2.SIFT = cv2.SIFT_create()
-# detector.setContrastThreshold(0.03)
-# N_good = 32  # number of good matches candidates
-# D = 24  # max search depth
-# thresh_des = 0.1  # threshold for descriptor distance, used to judge two descriptors' similarity
-# thresh_cost = 0.08  # if the maximum cost of adding `m` to matches is less than this, accept `m`
-
-""" ORB settings """
-# detector = cv2.ORB_create()
-# N1 = 500
-# N2 = 500
-# N_good = 50  # number of good matches
-# D = 24  # max search depth
-# thresh_des = 100  # threshold for descriptor distance, used to judge two descriptors' similarity
-# thresh_cost = 0.08  # if the maximum cost of adding `m` to matches is less than this, accept `m`
-
 """ SuperPoint settings """
 detector: SuperPoint = SuperPoint(max_num_keypoints=512).eval()
 N_good = 32  # number of good matches candidates
@@ -103,7 +86,7 @@ def volume_equal(matches, pairs, pts1, pts2):
     return flags
 
 
-def tree_search(pts1, pts2, Mh12, **dbg):
+def search(pts1, pts2, Mh12, **dbg):
     n1, n2 = Mh12.shape
     matches = []
     rlt = []
@@ -165,7 +148,7 @@ def SPP_detect(img, mask):
     return feat["keypoints"].cpu().numpy().astype(np.int32).squeeze(), feat["descriptors"].cpu().numpy().squeeze()
 
 
-def match_features(match_data: util.MatchData, cache_id=None):
+def match(match_data: util.MatchData, cache_id=None):
     """match imgs_src and img_dst in match_data and store the result in it
     imgs_src, clds_src: (N, H, W, 3)
     img_dst, cld_dst: (H, W, 3), (H, W, 3)
@@ -175,7 +158,6 @@ def match_features(match_data: util.MatchData, cache_id=None):
     """ load from match_data """
     imgs_src, clds_src, masks_src = match_data.imgs_src, match_data.clds_src, match_data.masks_src
     img_dst, cld_dst, mask_dst = match_data.img_dst, match_data.cld_dst, match_data.mask_dst
-    # kp_dst, des_dst = detector.detectAndCompute(img_dst, mask_dst)
     uv_dst, des_dst = SPP_detect(img_dst, mask_dst)
 
     if len(uv_dst) == 0:
@@ -216,7 +198,7 @@ def match_features(match_data: util.MatchData, cache_id=None):
         # global thresh_des
         # util.plot_keypoints(img_src, img_dst, uv_src, uv_dst, Mh12, thresh_des)
 
-        matches, cost = tree_search(pts_src, pts_dst, Mh12)
+        matches, cost = search(pts_src, pts_dst, Mh12)
         matches_list.append((matches, cost))
         if len(matches) == D:
             break
