@@ -181,7 +181,7 @@ if __name__ == "__main__":
     des_src = des_src / np.sum(des_src, axis=-1, keepdims=True)
     des_dst = des_dst / np.sum(des_dst, axis=-1, keepdims=True)
     Mf12 = np.linalg.norm(des_src[:, np.newaxis, :] - des_dst[np.newaxis, :, :], axis=-1)
-    pairs_simi = np.argwhere(Mf12 < gmatch.thresh_des)
+    pairs_simi = np.argwhere(Mf12 < gmatch.thresh_feat)
 
     m = [(93, 158), (58, 111), (114, 172)]
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))

@@ -10,27 +10,27 @@ import matplotlib.pyplot as plt
 HAM_TAB = np.array(
     [bin(i).count("1") for i in range(256)], dtype=np.uint8
 )  # used to compute hamming distance, only ORB uses it now
-CACHE = {}  # cache for keypoints and descriptors of imgs_src
+CACHE = {}  # cache for keypoints and features of imgs_src
 
 """ SIFT settings """
-# detector: cv2.SIFT = cv2.SIFT_create()
-# detector.setContrastThreshold(0.03)
-# N_good = 32  # number of good matches candidates
-# D = 24  # max search depth
-# thresh_des = 0.1  # threshold for descriptor distance, used to judge two descriptors' similarity
-# thresh_cost = 0.08  # if the maximum cost of adding `m` to matches is less than this, accept `m`
-# thresh_flip = 0.8  # threshold for flipover judgement
-# feat_mat = lambda des1, des2: sift_mat(des1, des2)  # feature distance matrix
+detector: cv2.SIFT = cv2.SIFT_create()
+detector.setContrastThreshold(0.03)
+N_good = 32  # number of good matches candidates
+D = 24  # max search depth
+thresh_feat = 0.1  # threshold for feature distance, used to judge the similarity of two feature vectors
+thresh_cost = 0.08  # if the maximum cost of adding `m` to matches is less than this, accept `m`
+thresh_flip = 0.8  # threshold for flipover judgement
+feat_mat = lambda des1, des2: sift_mat(des1, des2)  # feature distance matrix
 
 
 """ ORB settings """
-detector = cv2.ORB_create(scaleFactor=1.4)
-N_good = 30  # number of good matches
-D = 24  # max search depth
-thresh_des = 90  # threshold for descriptor distance, used to judge two descriptors' similarity
-thresh_cost = 0.08  # if the maximum cost of adding `m` to matches is less than this, accept `m`
-thresh_flip = 0.8  # threshold for flipover judgement
-feat_mat = lambda des1, des2: orb_mat(des1, des2)  # feature distance matrix
+# detector = cv2.ORB_create(scaleFactor=1.4)
+# N_good = 30  # number of good matches
+# D = 24  # max search depth
+# thresh_feat = 90  # threshold for feature distance, used to judge the similarity of two feature vectors
+# thresh_cost = 0.08  # if the maximum cost of adding `m` to matches is less than this, accept `m`
+# thresh_flip = 0.8  # threshold for flipover judgement
+# feat_mat = lambda des1, des2: orb_mat(des1, des2)  # feature distance matrix
 
 
 def orb_mat(des1, des2):
@@ -119,7 +119,7 @@ def flipover(matches, pairs, pts1, pts2):
 
 
 def search(pts1, pts2, Mf12):
-    """search and backtracking with geometric constraints (distance matrix and flip-over removal)"""
+    """search with geometric constraints (distance matrix and flip-over removal)"""
     n1, n2 = Mf12.shape
     matches = []
     rlt = []
@@ -133,7 +133,7 @@ def search(pts1, pts2, Mf12):
     pairs_good = np.array(np.unravel_index(part_indices, Mf12.shape)).T
     # pairs_good = np.argwhere(Mf12 < 0.1)
 
-    pairs_simi = np.argwhere(Mf12 < thresh_des)
+    pairs_simi = np.argwhere(Mf12 < thresh_feat)
     if len(pairs_simi) == 0:
         return np.array([]), 1
 
@@ -174,7 +174,7 @@ def search(pts1, pts2, Mf12):
 
 def Match(match_data: util.MatchData, cache_id=None):
     """match each of imgs_src with img_dst in match_data and store the result in it;
-        keypoints and descriptors for imgs_src will be cached with cache_id if provided
+        keypoints and features for imgs_src will be cached with cache_id if provided
     imgs_src, clds_src: (N, H, W, 3)
     img_dst, cld_dst: (H, W, 3)
     """
@@ -199,7 +199,7 @@ def Match(match_data: util.MatchData, cache_id=None):
     uv_dst = np.array([k.pt for k in kp_dst], dtype=np.int32)
     pts_dst = cld_dst[uv_dst[:, 1], uv_dst[:, 0]]
 
-    """ find the keypoints and descriptors with detector """
+    """ extract the keypoints and features with descriptor """
     if masks_src is None:
         masks_src = [None] * len(imgs_src)
     matches_list = []
@@ -224,7 +224,7 @@ def Match(match_data: util.MatchData, cache_id=None):
 
         """ <Tune>
             N1 and N2: plot to see whether keypoints are enough
-            thresh_des: find a suitable threshold for descriptor distance
+            thresh_des: find a suitable threshold for feature distance
         """
         # util.plot_keypoints(img_src, img_dst, uv_src, uv_dst, Mf12, thresh_des)
 
