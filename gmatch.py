@@ -1,4 +1,4 @@
-""" use ORB/SIFT detector to match features between two images """
+""" Use ORB/SIFT detector to match features between two images """
 
 import numpy as np
 import cv2
@@ -10,30 +10,36 @@ import matplotlib.pyplot as plt
 HAM_TAB = np.array(
     [bin(i).count("1") for i in range(256)], dtype=np.uint8
 )  # used to compute hamming distance, only ORB uses it now
-CACHE = {}
+CACHE = {}  # cache for keypoints and descriptors of imgs_src
 
 """ SIFT settings """
-detector: cv2.SIFT = cv2.SIFT_create()
-detector.setContrastThreshold(0.03)
-N_good = 32  # number of good matches candidates
-D = 24  # max search depth
-thresh_des = 0.1  # threshold for descriptor distance, used to judge two descriptors' similarity
-thresh_cost = 0.08  # if the maximum cost of adding `m` to matches is less than this, accept `m`
-thresh_flip = 0.8  # threshold for flipover judgement
+# detector: cv2.SIFT = cv2.SIFT_create()
+# detector.setContrastThreshold(0.03)
+# N_good = 32  # number of good matches candidates
+# D = 24  # max search depth
+# thresh_des = 0.1  # threshold for descriptor distance, used to judge two descriptors' similarity
+# thresh_cost = 0.08  # if the maximum cost of adding `m` to matches is less than this, accept `m`
+# thresh_flip = 0.8  # threshold for flipover judgement
+# feat_mat = lambda des1, des2: sift_mat(des1, des2)  # feature distance matrix
+
 
 """ ORB settings """
-# detector = cv2.ORB_create()
-# N1 = 500
-# N2 = 500
-# N_good = 50  # number of good matches
-# D = 24  # max search depth
-# thresh_des = 100  # threshold for descriptor distance, used to judge two descriptors' similarity
-# thresh_cost = 0.08  # if the maximum cost of adding `m` to matches is less than this, accept `m`
+detector = cv2.ORB_create(scaleFactor=1.4)
+N_good = 30  # number of good matches
+D = 24  # max search depth
+thresh_des = 90  # threshold for descriptor distance, used to judge two descriptors' similarity
+thresh_cost = 0.08  # if the maximum cost of adding `m` to matches is less than this, accept `m`
+thresh_flip = 0.8  # threshold for flipover judgement
+feat_mat = lambda des1, des2: orb_mat(des1, des2)  # feature distance matrix
 
 
-def ham_mat(des1, des2):
-    """compute hamming distance matrix `Mh` between two descriptors
-    Mh[i, j] == HamDist(des1[i], des2[j])
+def orb_mat(des1, des2):
+    """compute feature distance matrix `Mf` for ORB, whose metric is Hamming distance.
+    > Mh[i, j] == HamDist(des1[i], des2[j])
+
+    - Input:
+        des1: (n1, 32), uint8
+        des2: (n2, 32), uint8
     """
     global HAM_TAB
     ## broadcast des1 and des2
@@ -44,18 +50,33 @@ def ham_mat(des1, des2):
     ## compute hamming distance
     hamming_distances = HAM_TAB[xor_result]
     ## sum along the last axis to get the hamming distance matrix
-    Mh = np.sum(hamming_distances, axis=-1)
-    return Mh
+    Mf = np.sum(hamming_distances, axis=-1)
+    return Mf
+
+
+def sift_mat(des1, des2):
+    """compute feature distance matrix `Mf` for SIFT, whose metric is Euclidean distance.
+
+    Note: des1 and des2 will be L1-normalized
+
+    - Input:
+        des1: (n1, 128), integer stored in float32
+        des2: (n2, 128), integer stored in float32
+    """
+    des1_ = des1 / np.sum(des1, axis=-1, keepdims=True)
+    des2_ = des2 / np.sum(des2, axis=-1, keepdims=True)
+    Mf = np.linalg.norm(des1_[:, np.newaxis, :] - des2_[np.newaxis, :, :], axis=-1)
+    return Mf
 
 
 def cost(matches, pairs, Me11, Me22):
-    """cost function for distance matrix
+    """cost function for distance matrix.
     matches: (d, 2), pairs: (n, 2), Me11: (n1, n1), Me22: (n2, n2)
     """
     if len(matches) == 0:
         return 0
     m0, m1 = pairs[:, 0], pairs[:, 1]  # (n, )
-    i, j = np.array(matches).T  # (d, )
+    i, j = zip(*matches)  # (d, )
     dist1 = Me11[m0[:, np.newaxis], i]
     dist2 = Me22[m1[:, np.newaxis], j]
     err = np.divide(np.abs(dist1 - dist2), dist1, out=np.ones_like(dist1), where=dist1 != 0)  # (n, d), error rate
@@ -78,7 +99,6 @@ def volume_equal(matches, pairs, pts1, pts2):
     return flags
 
 
-import warnings; warnings.simplefilter("error")
 def flipover(matches, pairs, pts1, pts2):
     """flipover judgement
     pairs: (n, 2), return (n, ) boolean array"""
@@ -163,7 +183,16 @@ def Match(match_data: util.MatchData, cache_id=None):
     """ load from match_data """
     imgs_src, clds_src, masks_src = match_data.imgs_src, match_data.clds_src, match_data.masks_src
     img_dst, cld_dst, mask_dst = match_data.img_dst, match_data.cld_dst, match_data.mask_dst
-    kp_dst, des_dst = detector.detectAndCompute(img_dst, mask_dst)
+    """ get bbox from mask_dst (orb/sift can work well with bbox, no need for segmentation) """
+    ind = np.argwhere(mask_dst != 0)
+    r1, c1 = ind.min(axis=0)
+    r2, c2 = ind.max(axis=0)
+    mask_dst[r1 : r2 + 1, c1 : c2 + 1] = 255
+    """ crop img_dst (and cld_dst) """
+    img_dst = img_dst[r1 : r2 + 1, c1 : c2 + 1]
+    cld_dst = cld_dst[r1 : r2 + 1, c1 : c2 + 1]
+    mask_dst = mask_dst[r1 : r2 + 1, c1 : c2 + 1]
+    kp_dst, des_dst = detector.detectAndCompute(img_dst, mask_dst)  # 0.3s for 1920x1080 => 0.014s for 211x200
     if len(kp_dst) == 0:
         print("No keypoints found in img2")
         return
@@ -190,22 +219,17 @@ def Match(match_data: util.MatchData, cache_id=None):
         pts_src = cld_src[uv_src[:, 1], uv_src[:, 0]]
         uvs_src.append(uv_src)
 
-        """ L1-normalized SIFT """
-        des_src = des_src / np.sum(des_src, axis=-1, keepdims=True)
-        des_dst = des_dst / np.sum(des_dst, axis=-1, keepdims=True)
-        Mf12 = np.linalg.norm(des_src[:, np.newaxis, :] - des_dst[np.newaxis, :, :], axis=-1)
+        """ Feature Distance Matrix (for visual similarity) """
+        Mf12 = feat_mat(des_src, des_dst)
 
         """ <Tune>
             N1 and N2: plot to see whether keypoints are enough
             thresh_des: find a suitable threshold for descriptor distance
         """
-        # global thresh_des
         # util.plot_keypoints(img_src, img_dst, uv_src, uv_dst, Mf12, thresh_des)
 
         matches, cost = search(pts_src, pts_dst, Mf12)
         matches_list.append((matches, cost))
-        if len(matches) == D:
-            break
 
         """ visualization """
         # if len(matches) < 3:
@@ -213,6 +237,9 @@ def Match(match_data: util.MatchData, cache_id=None):
         # else:
         #     print(f"\timgs_src[{i}]: matches found. depth {len(matches)}, cost {cost:.3f}")
         #     util.plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
+
+        if len(matches) == D:
+            break
 
     """ take max depth matches as the best """
     match_data.matches_list, match_data.cost_list = zip(*matches_list)
