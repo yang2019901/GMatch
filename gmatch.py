@@ -187,13 +187,16 @@ def Match(match_data: util.MatchData, cache_id=None):
     kp_dst, des_dst = detector.detectAndCompute(img_dst, mask_dst)  # 0.3s for 1920x1080 => 0.014s for 211x200
     if len(kp_dst) == 0:
         print("No keypoints found in img2")
+        match_data.matches_list = [[]]
+        match_data.cost_list = [1]
+        match_data.uvs_src = []
+        match_data.uv_dst = None
+        match_data.idx_best = 0
         return
     uv_dst = np.array([k.pt for k in kp_dst], dtype=np.int32)
     pts_dst = cld_dst[uv_dst[:, 1], uv_dst[:, 0]]
 
     """ extract the keypoints and features with descriptor """
-    if masks_src is None:
-        masks_src = [None] * len(imgs_src)
     matches_list = []
     uvs_src = []
     for i, (img_src, cld_src, mask_src) in enumerate(zip(imgs_src, clds_src, masks_src)):
