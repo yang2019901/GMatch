@@ -147,6 +147,10 @@ def Match(match_data: util.MatchData, cache_id=None):
     kp_dst, des_dst = detector.detectAndCompute(img_dst, mask_dst)  # 0.3s for 1920x1080 => 0.014s for 211x200
     if len(kp_dst) < 2:
         print("No enough keypoints found in img2")
+        match_data.matches_list = [[]]
+        match_data.idx_best = 0
+        match_data.uvs_src = []
+        match_data.uv_dst = None
         return
     uv_dst = np.array([k.pt for k in kp_dst], dtype=np.int32)
 
@@ -223,10 +227,10 @@ if __name__ == "__main__":
     meta_data = util.MetaData(proj_path=os.path.dirname(os.path.abspath(__file__)), dataset="hope")
     match_data = util.MatchData()
 
-    # meta_data.init(scene_id=1, img_id=0, pt_id=15, mask_id=1)
+    # meta_data.init(scene_id=38, img_id=4, pt_id=13, mask_id=14)
     # load(meta_data, match_data)
     # Match(match_data)
-    # print(f"obj: {meta_data.pt_id}, len: {len(match_data.matches_list[match_data.idx_best])}")
+    # # print(f"obj: {meta_data.pt_id}, len: {len(match_data.matches_list[match_data.idx_best])}")
     # solve(match_data)
     # exit()
 
