@@ -6,7 +6,6 @@ import json, os.path, time
 import cProfile
 import copy
 
-import gmatch
 import util
 
 
@@ -23,7 +22,7 @@ def render(meta_data):
     util.save_snapshots(snapshots, meta_data.pt_path)
 
 
-cache = {}
+cache = {}  # cache for model snapshots (imgs_src, clds_src, masks_src, poses_src)
 
 
 def load(meta_data: util.MetaData, match_data: util.MatchData):
@@ -48,8 +47,16 @@ def load(meta_data: util.MetaData, match_data: util.MatchData):
     img_dst = cv2.imread(meta_data.img_path, cv2.IMREAD_COLOR_RGB)
     depth_dst = cv2.imread(meta_data.depth_path, cv2.IMREAD_UNCHANGED)
     mask_dst = cv2.imread(meta_data.mask_path, cv2.IMREAD_UNCHANGED)
-
     cld_dst = util.depth2cld(depth_dst * 0.001 * meta_data.depth_scale, meta_data.cam_intrin)
+    """ get bbox from mask_dst """
+    ind = np.argwhere(mask_dst != 0)
+    r1, c1 = ind.min(axis=0)
+    r2, c2 = ind.max(axis=0)
+    """ crop dst things """
+    img_dst = img_dst[r1 : r2 + 1, c1 : c2 + 1]
+    cld_dst = cld_dst[r1 : r2 + 1, c1 : c2 + 1]
+    mask_dst = np.ones((r2 - r1 + 1, c2 - c1 + 1), dtype=np.uint8) * 255
+
     # util.vis_cld(cld_dst, img_dst)
     """ store data to match_data """
     match_data.imgs_src = imgs_src
@@ -123,6 +130,68 @@ def result2record(meta_data: util.MetaData, match_data: util.MatchData):
     return [str(scene_id), str(im_id), str(obj_id), str(score), R, t]
 
 
+def Match(match_data: util.MatchData, cache_id=None):
+    """Nearest Neighbor Match with ORB/SIFT detector
+    imgs_src, clds_src: (N, H, W, 3)
+    img_dst, cld_dst: (H, W, 3)
+    """
+    # detector: cv2.ORB = cv2.ORB_create()
+    # norm_type = cv2.NORM_HAMMING
+    detector: cv2.SIFT = cv2.SIFT_create()
+    norm_type = cv2.NORM_L2
+    assert len(match_data.imgs_src) > 0, "imgs_src is empty"
+    """ load from match_data """
+    imgs_src, img_dst = match_data.imgs_src, match_data.img_dst
+    masks_src, mask_dst = match_data.masks_src, match_data.mask_dst
+
+    kp_dst, des_dst = detector.detectAndCompute(img_dst, mask_dst)  # 0.3s for 1920x1080 => 0.014s for 211x200
+    if len(kp_dst) < 2:
+        print("No enough keypoints found in img2")
+        return
+    uv_dst = np.array([k.pt for k in kp_dst], dtype=np.int32)
+
+    """ find the keypoints and descriptors with detector """
+    if masks_src is None:
+        masks_src = [None] * len(imgs_src)
+    matches_list = []
+    uvs_src = []
+    for i, (img_src, mask_src) in enumerate(zip(imgs_src, masks_src)):
+        kp_src, des_src = detector.detectAndCompute(img_src, mask_src)
+        if len(kp_src) < 2:
+            matches_list.append([])
+            continue
+        uv_src = np.array([k.pt for k in kp_src], dtype=np.int32)
+        uvs_src.append(uv_src)
+
+        bf = cv2.BFMatcher(norm_type)
+        pairs = bf.knnMatch(des_src, des_dst, k=2)
+
+        # Lowe's Ratio Test
+        matches = np.array([(m.queryIdx, m.trainIdx) for m, n in pairs if m.distance < 0.75 * n.distance])
+        matches_list.append(matches)
+
+        """ visualization """
+        # if len(matches) < 3:
+        #     print(f"\timgs_src[{i}]: matches NOT found.")
+        # else:
+        #     print(f"\timgs_src[{i}]: matches found. length {len(matches)}")
+        #     util.plot_matches(img_src, img_dst, uv_src[matches[:, 0], :], uv_dst[matches[:, 1], :])
+
+    """ take max depth matches as the best """
+    match_data.matches_list = matches_list
+    match_data.uvs_src = uvs_src
+    match_data.uv_dst = uv_dst
+    match_data.idx_best = np.argmax([len(matches) for matches in matches_list])
+
+    """ visualization """
+    # if len(match_data.matches_list[match_data.idx_best]) > 0:
+    #     img_src = imgs_src[match_data.idx_best]
+    #     uv_src = uvs_src[match_data.idx_best]
+    #     matches = matches_list[match_data.idx_best]
+    #     util.plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
+    return
+
+
 def process_img(meta_data: util.MetaData, match_data: util.MatchData, targets):
     """targets: a list of `target` where `target` is (mask_id, scene_id, img_id, objs_id), dtype=(int, int, int, List[int])
     meta_data, match_data: cache assigned to the function
@@ -137,7 +206,7 @@ def process_img(meta_data: util.MetaData, match_data: util.MatchData, targets):
         for obj_id in obj_ids:
             meta_data.init(pt_id=obj_id, scene_id=scene_id, img_id=img_id, mask_id=mask_id)
             load(meta_data, match_data)
-            gmatch.match_features(match_data, meta_data.pt_id)
+            Match(match_data)
             print(f"\tobj: {meta_data.pt_id}, len: {len(match_data.matches_list[match_data.idx_best])}")
             match_data_list.append(copy.copy(match_data))
         ## take the object with the most matches
@@ -154,9 +223,9 @@ if __name__ == "__main__":
     meta_data = util.MetaData(proj_path=os.path.dirname(os.path.abspath(__file__)), dataset="hope")
     match_data = util.MatchData()
 
-    # meta_data.init(pt_id=23, scene_id=6, img_id=0, mask_id=1)
+    # meta_data.init(scene_id=1, img_id=0, pt_id=15, mask_id=1)
     # load(meta_data, match_data)
-    # gmatch.match_features(match_data)
+    # Match(match_data)
     # print(f"obj: {meta_data.pt_id}, len: {len(match_data.matches_list[match_data.idx_best])}")
     # solve(match_data)
     # exit()
