@@ -183,15 +183,7 @@ def Match(match_data: util.MatchData, cache_id=None):
     """ load from match_data """
     imgs_src, clds_src, masks_src = match_data.imgs_src, match_data.clds_src, match_data.masks_src
     img_dst, cld_dst, mask_dst = match_data.img_dst, match_data.cld_dst, match_data.mask_dst
-    """ get bbox from mask_dst (orb/sift can work well with bbox, no need for segmentation) """
-    ind = np.argwhere(mask_dst != 0)
-    r1, c1 = ind.min(axis=0)
-    r2, c2 = ind.max(axis=0)
-    mask_dst[r1 : r2 + 1, c1 : c2 + 1] = 255
-    """ crop img_dst (and cld_dst) """
-    img_dst = img_dst[r1 : r2 + 1, c1 : c2 + 1]
-    cld_dst = cld_dst[r1 : r2 + 1, c1 : c2 + 1]
-    mask_dst = mask_dst[r1 : r2 + 1, c1 : c2 + 1]
+
     kp_dst, des_dst = detector.detectAndCompute(img_dst, mask_dst)  # 0.3s for 1920x1080 => 0.014s for 211x200
     if len(kp_dst) == 0:
         print("No keypoints found in img2")

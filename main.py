@@ -49,8 +49,18 @@ def load(meta_data: util.MetaData, match_data: util.MatchData):
     img_dst = cv2.imread(meta_data.img_path, cv2.IMREAD_COLOR_RGB)
     depth_dst = cv2.imread(meta_data.depth_path, cv2.IMREAD_UNCHANGED)
     mask_dst = cv2.imread(meta_data.mask_path, cv2.IMREAD_UNCHANGED)
+    cld_dst = util.depth2cld(depth_dst  * (meta_data.depth_scale * 0.001), meta_data.cam_intrin)
 
-    cld_dst = util.depth2cld(depth_dst * 0.001 * meta_data.depth_scale, meta_data.cam_intrin)
+    """ get bbox from mask_dst (orb/sift can work well with bbox, no need for segmentation) """
+    ind = np.argwhere(mask_dst != 0)
+    r1, c1 = ind.min(axis=0)
+    r2, c2 = ind.max(axis=0)
+    mask_dst[r1 : r2 + 1, c1 : c2 + 1] = 255
+    """ crop img_dst (and cld_dst) """
+    img_dst = img_dst[r1 : r2 + 1, c1 : c2 + 1]
+    mask_dst = mask_dst[r1 : r2 + 1, c1 : c2 + 1]
+    cld_dst = cld_dst[r1 : r2 + 1, c1 : c2 + 1]
+
     # util.vis_cld(cld_dst, img_dst)
     """ store data to match_data """
     match_data.imgs_src = imgs_src
