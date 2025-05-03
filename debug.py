@@ -168,8 +168,8 @@ if __name__ == "__main__":
 
     img_src, cld_src, mask_src = match_data.imgs_src[2], match_data.clds_src[2], match_data.masks_src[2]
     img_dst, cld_dst, mask_dst = match_data.img_dst, match_data.cld_dst, match_data.mask_dst
-    kp_dst, des_dst = gmatch.detector.detectAndCompute(img_dst, mask_dst)
-    kp_src, des_src = gmatch.detector.detectAndCompute(img_src, mask_src)
+    kp_dst, feat_dst = gmatch.detector.detectAndCompute(img_dst, mask_dst)
+    kp_src, feat_src = gmatch.detector.detectAndCompute(img_src, mask_src)
     uv_dst = np.array([k.pt for k in kp_dst], dtype=np.int32)
     uv_src = np.array([k.pt for k in kp_src], dtype=np.int32)
     ############################################################################
@@ -178,9 +178,9 @@ if __name__ == "__main__":
     Me11 = np.linalg.norm(pts_src[:, np.newaxis, :] - pts_src, axis=-1)
     Me22 = np.linalg.norm(pts_dst[:, np.newaxis, :] - pts_dst, axis=-1)
     """ L1-normalized SIFT """
-    des_src = des_src / np.sum(des_src, axis=-1, keepdims=True)
-    des_dst = des_dst / np.sum(des_dst, axis=-1, keepdims=True)
-    Mf12 = np.linalg.norm(des_src[:, np.newaxis, :] - des_dst[np.newaxis, :, :], axis=-1)
+    feat_src = feat_src / np.sum(feat_src, axis=-1, keepdims=True)
+    feat_dst = feat_dst / np.sum(feat_dst, axis=-1, keepdims=True)
+    Mf12 = np.linalg.norm(feat_src[:, np.newaxis, :] - feat_dst[np.newaxis, :, :], axis=-1)
     pairs_simi = np.argwhere(Mf12 < gmatch.thresh_feat)
 
     m = [(93, 158), (58, 111), (114, 172)]

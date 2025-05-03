@@ -442,7 +442,7 @@ def plot_matches(img1, img2, uv1, uv2):
     return
 
 
-def plot_keypoints(img1, img2, uv1, uv2, Mf12, thresh_des):
+def plot_keypoints(img1, img2, uv1, uv2, Mf12, thresh_feat):
     idx1 = -1
     alts = []
     idx2 = -1
@@ -461,7 +461,7 @@ def plot_keypoints(img1, img2, uv1, uv2, Mf12, thresh_des):
         ax1.set_title(f"keypoints: {len(uv1)}, selected: {idx1}")
         clr1[idx1] = R
         dists = Mf12[idx1]
-        alts = np.where(dists < thresh_des)[0]
+        alts = np.where(dists < thresh_feat)[0]
         clr2[alts] = R
         if idx2 != -1:
             fig.suptitle(f"feature distance: {Mf12[idx1, idx2]}")
