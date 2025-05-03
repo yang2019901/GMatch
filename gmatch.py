@@ -6,6 +6,9 @@ import util
 import time
 import matplotlib.pyplot as plt
 
+from lightglue import SuperPoint, DISK
+from lightglue.utils import numpy_image_to_torch
+
 
 HAM_TAB = np.array(
     [bin(i).count("1") for i in range(256)], dtype=np.uint8
@@ -20,7 +23,7 @@ D = 24  # max search depth
 thresh_feat = 0.1  # threshold for feature distance, used to judge the similarity of two feature vectors
 thresh_cost = 0.08  # if the maximum cost of adding `m` to matches is less than this, accept `m`
 thresh_flip = 0.8  # threshold for flipover judgement
-feat_mat = lambda des1, des2: sift_mat(des1, des2)  # feature distance matrix
+feat_mat = lambda feat1, feat2: sift_mat(feat1, feat2)  # feature distance matrix
 
 
 """ ORB settings """
@@ -30,23 +33,32 @@ feat_mat = lambda des1, des2: sift_mat(des1, des2)  # feature distance matrix
 # thresh_feat = 90  # threshold for feature distance, used to judge the similarity of two feature vectors
 # thresh_cost = 0.08  # if the maximum cost of adding `m` to matches is less than this, accept `m`
 # thresh_flip = 0.8  # threshold for flipover judgement
-# feat_mat = lambda des1, des2: orb_mat(des1, des2)  # feature distance matrix
+# feat_mat = lambda feat1, feat2: orb_mat(feat1, feat2)  # feature distance matrix
 
 
-def orb_mat(des1, des2):
+""" SuperPoint settings """
+detector: SuperPoint = SuperPoint(max_num_keypoints=512).eval()
+N_good = 32  # number of good matches candidates
+D = 24  # max search depth
+thresh_feat = 1.25  # threshold for feature distance, used to judge the similarity of two feature vectors
+thresh_cost = 0.08  # if the maximum cost of adding `m` to matches is less than this, accept `m`
+thresh_flip = 0.01  # threshold for flipover judgement
+
+
+def orb_mat(feat1, feat2):
     """compute feature distance matrix `Mf` for ORB, whose metric is Hamming distance.
-    > Mh[i, j] == HamDist(des1[i], des2[j])
+    > Mh[i, j] == HamDist(feat[i], feat[j])
 
     - Input:
-        des1: (n1, 32), uint8
-        des2: (n2, 32), uint8
+        feat1: (n1, 32), uint8
+        feat2: (n2, 32), uint8
     """
     global HAM_TAB
-    ## broadcast des1 and des2
-    des1_ = des1[:, np.newaxis, :]
-    des2_ = des2[np.newaxis, :, :]
+    ## broadcast feat1 and feat2
+    feat1_ = feat1[:, np.newaxis, :]
+    feat2_ = feat2[np.newaxis, :, :]
     ## compute xor result
-    xor_result = des1_ ^ des2_
+    xor_result = feat1_ ^ feat2_
     ## compute hamming distance
     hamming_distances = HAM_TAB[xor_result]
     ## sum along the last axis to get the hamming distance matrix
@@ -54,18 +66,18 @@ def orb_mat(des1, des2):
     return Mf
 
 
-def sift_mat(des1, des2):
+def sift_mat(feat1, feat2):
     """compute feature distance matrix `Mf` for SIFT, whose metric is Euclidean distance.
 
-    Note: des1 and des2 will be L1-normalized
+    Note: feat1 and feat2 will be L1-normalized
 
     - Input:
-        des1: (n1, 128), integer stored in float32
-        des2: (n2, 128), integer stored in float32
+        feat1: (n1, 128), integer stored in float32
+        feat2: (n2, 128), integer stored in float32
     """
-    des1_ = des1 / np.sum(des1, axis=-1, keepdims=True)
-    des2_ = des2 / np.sum(des2, axis=-1, keepdims=True)
-    Mf = np.linalg.norm(des1_[:, np.newaxis, :] - des2_[np.newaxis, :, :], axis=-1)
+    feat1_ = feat1 / np.sum(feat1, axis=-1, keepdims=True)
+    feat2_ = feat2 / np.sum(feat2, axis=-1, keepdims=True)
+    Mf = np.linalg.norm(feat1_[:, np.newaxis, :] - feat2_[np.newaxis, :, :], axis=-1)
     return Mf
 
 
@@ -172,6 +184,14 @@ def search(pts1, pts2, Mf12):
     return (rlt, rlt_cost) if len(rlt) >= 3 else (np.array([]), 1)
 
 
+def SPP_detect(img, mask):
+    """ return uv and feat """
+    global detector
+    tmp = (img * (mask[:, :, np.newaxis] > 0)).astype(np.uint8)
+    feat = detector.extract(numpy_image_to_torch(tmp))
+    return feat["keypoints"].cpu().numpy().astype(np.int32).squeeze(), feat["descriptors"].cpu().numpy().squeeze()
+
+
 def Match(match_data: util.MatchData, cache_id=None):
     """match each of imgs_src with img_dst in match_data and store the result in it;
         keypoints and features for imgs_src will be cached with cache_id if provided
@@ -184,8 +204,8 @@ def Match(match_data: util.MatchData, cache_id=None):
     imgs_src, clds_src, masks_src = match_data.imgs_src, match_data.clds_src, match_data.masks_src
     img_dst, cld_dst, mask_dst = match_data.img_dst, match_data.cld_dst, match_data.mask_dst
 
-    kp_dst, des_dst = detector.detectAndCompute(img_dst, mask_dst)  # 0.3s for 1920x1080 => 0.014s for 211x200
-    if len(kp_dst) == 0:
+    uv_dst, feat_dst = SPP_detect(img_dst, mask_dst)
+    if len(uv_dst) == 0:
         print("No keypoints found in img2")
         match_data.matches_list = [[]]
         match_data.cost_list = [1]
@@ -193,35 +213,33 @@ def Match(match_data: util.MatchData, cache_id=None):
         match_data.uv_dst = None
         match_data.idx_best = 0
         return
-    uv_dst = np.array([k.pt for k in kp_dst], dtype=np.int32)
     pts_dst = cld_dst[uv_dst[:, 1], uv_dst[:, 0]]
 
     """ extract the keypoints and features with descriptor """
     matches_list = []
     uvs_src = []
     for i, (img_src, cld_src, mask_src) in enumerate(zip(imgs_src, clds_src, masks_src)):
-        kp_src, des_src = (
-            CACHE[(cache_id, i)] if (cache_id, i) in CACHE else detector.detectAndCompute(img_src, mask_src)
+        uv_src, feat_src = (
+            CACHE[(cache_id, i)] if (cache_id, i) in CACHE else SPP_detect(img_src, mask_src)
         )
 
         if cache_id is not None:
-            CACHE[(cache_id, i)] = (kp_src, des_src)
+            CACHE[(cache_id, i)] = (uv_src, feat_src)
 
-        if len(kp_src) == 0:
+        if len(uv_src) == 0:
             matches_list.append(([], 1))
             continue
-        uv_src = np.array([k.pt for k in kp_src], dtype=np.int32)
         pts_src = cld_src[uv_src[:, 1], uv_src[:, 0]]
         uvs_src.append(uv_src)
 
         """ Feature Distance Matrix (for visual similarity) """
-        Mf12 = feat_mat(des_src, des_dst)
+        Mf12 = feat_mat(feat_src, feat_dst)
 
         """ <Tune>
             N1 and N2: plot to see whether keypoints are enough
-            thresh_des: find a suitable threshold for feature distance
+            thresh_feat: find a suitable threshold for feature distance
         """
-        # util.plot_keypoints(img_src, img_dst, uv_src, uv_dst, Mf12, thresh_des)
+        # util.plot_keypoints(img_src, img_dst, uv_src, uv_dst, Mf12, thresh_feat)
 
         matches, cost = search(pts_src, pts_dst, Mf12)
         matches_list.append((matches, cost))
@@ -243,9 +261,9 @@ def Match(match_data: util.MatchData, cache_id=None):
     match_data.idx_best = np.argmax([len(matches) for matches, _ in matches_list])
 
     """ visualization """
-    # if len(match_data.matches_list[match_data.idx_best]) > 0:
-    #     img_src = imgs_src[match_data.idx_best]
-    #     uv_src = uvs_src[match_data.idx_best]
-    #     matches = matches_list[match_data.idx_best][0]
-    #     util.plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
+    if len(match_data.matches_list[match_data.idx_best]) > 0:
+        img_src = imgs_src[match_data.idx_best]
+        uv_src = uvs_src[match_data.idx_best]
+        matches = matches_list[match_data.idx_best][0]
+        util.plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
     return
