@@ -10,20 +10,21 @@ import gmatch
 import util
 
 
+cache = {}
+
+
 def render(meta_data):
     """render model to snapshots and save to pt_path"""
     mesh = util.load_ply(meta_data.model_path)
     """ <Check Unit> calc diameter of the model to compare with 'models/models_info.json' """
     pts = np.asarray(mesh.vertices)
     bbox = (np.max(pts, axis=0) - np.min(pts, axis=0)) * 1000
-    print(f"saved to {meta_data.pt_path}, bbox: {bbox} mm")
-    # o3d.visualization.draw_geometries([mesh])
+    # axis_mesh = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
+    # o3d.visualization.draw_geometries([mesh, axis_mesh])
     snapshots = util.get_snapshots(mesh)
     util.vis_snapshots(snapshots)
     util.save_snapshots(snapshots, meta_data.pt_path)
-
-
-cache = {}
+    print(f"saved to {meta_data.pt_path}, bbox: {bbox} mm")
 
 
 def load(meta_data: util.MetaData, match_data: util.MatchData):
@@ -41,6 +42,7 @@ def load(meta_data: util.MetaData, match_data: util.MatchData):
         else:
             imgs_src, clds_src, masks_src, poses_src = data
             masks_src = masks_src.astype(np.uint8) * 255
+        imgs_src = [cv2.GaussianBlur(img, (5, 5), 0) for img in imgs_src]
         cache[meta_data.pt_id] = (imgs_src, clds_src, masks_src, poses_src)
     else:
         imgs_src, clds_src, masks_src, poses_src = cache[meta_data.pt_id]
@@ -49,7 +51,7 @@ def load(meta_data: util.MetaData, match_data: util.MatchData):
     img_dst = cv2.imread(meta_data.img_path, cv2.IMREAD_COLOR_RGB)
     depth_dst = cv2.imread(meta_data.depth_path, cv2.IMREAD_UNCHANGED)
     mask_dst = cv2.imread(meta_data.mask_path, cv2.IMREAD_UNCHANGED)
-    cld_dst = util.depth2cld(depth_dst  * (meta_data.depth_scale * 0.001), meta_data.cam_intrin)
+    cld_dst = util.depth2cld(depth_dst * (meta_data.depth_scale * 0.001), meta_data.cam_intrin)
 
     """ get bbox from mask_dst (orb/sift can work well with bbox, no need for segmentation) """
     ind = np.argwhere(mask_dst != 0)
@@ -60,6 +62,8 @@ def load(meta_data: util.MetaData, match_data: util.MatchData):
     img_dst = img_dst[r1 : r2 + 1, c1 : c2 + 1]
     mask_dst = mask_dst[r1 : r2 + 1, c1 : c2 + 1]
     cld_dst = cld_dst[r1 : r2 + 1, c1 : c2 + 1]
+
+    img_dst = cv2.GaussianBlur(img_dst, (5, 5), 0)
 
     # util.vis_cld(cld_dst, img_dst)
     """ store data to match_data """
@@ -161,7 +165,7 @@ def process_img(meta_data: util.MetaData, match_data: util.MatchData, targets):
     return [f'{", ".join(rec)}, {timespan:.2f}\n' for rec in record_list]
 
 
-if __name__ == "__main__":
+def run_hope():
     meta_data = util.MetaData(proj_path=os.path.dirname(os.path.abspath(__file__)), dataset="hope")
     match_data = util.MatchData()
 
@@ -213,3 +217,49 @@ if __name__ == "__main__":
             results = process_img(meta_data, match_data, targets)
             f.writelines(results)
             f.flush()
+
+
+def run_ycbv():
+    """test perception stability (precision, run-time, etc) on video"""
+    meta_data = util.MetaData(proj_path=os.path.dirname(os.path.abspath(__file__)), dataset="ycbv")
+    match_data = util.MatchData()
+
+    pt_id = 2
+    scene_id = 50
+    mask_id = 0
+    img_folder = os.path.join(meta_data.proj_path, f"bop_data/ycbv/test/{str(scene_id).zfill(6)}/rgb")
+    with open(f"bop_data/ycbv/test/{str(scene_id).zfill(6)}/scene_gt.json", "r") as f:
+        content = json.load(f)
+    files = os.listdir(img_folder)
+    imgs_id = [int(f.split(".")[0]) for f in files]
+    imgs_id.sort()
+    result = []
+    for img_id in imgs_id:
+        # meta_data.init(pt_id=3, scene_id=51, img_id=img_id, mask_id=1)
+        meta_data.init(pt_id=pt_id, scene_id=scene_id, img_id=img_id, mask_id=mask_id)
+        load(meta_data, match_data)
+        t0 = time.time()
+        gmatch.Match(match_data, cache_id=meta_data.pt_id)
+        solve(match_data)
+        dt = time.time() - t0
+        print(f"img_id: {meta_data.img_id}, len: {len(match_data.matches_list[match_data.idx_best])}", end=", ")
+
+        M_pred = match_data.mat_m2c
+
+        M = np.eye(4)
+        gt = next((x for x in content[str(img_id)] if x["obj_id"] == pt_id))
+        M[:3, :3] = np.array(gt["cam_R_m2c"]).reshape(3, 3)
+        M[:3, 3] = np.array(gt["cam_t_m2c"]) * 0.001
+
+        M_err = np.linalg.inv(M) @ M_pred
+
+        dist_err = np.linalg.norm(M_err[:3, 3])
+        ang_err = np.arccos((np.trace(M_err[:3, :3]) - 1) / 2)
+        print(f"dist_err: {dist_err*1000:.1f} mm, ang_err: {np.rad2deg(ang_err):.1f} deg", f"dt: {dt*1000:.1f} ms")
+        result.append(f"{meta_data.img_id}, {dist_err*1000:.1f}, {np.rad2deg(ang_err):.1f}, {dt*1000:.1f}\n")
+
+    with open(f"result_ycbv_{pt_id}_icp.csv", "w") as f:
+        f.writelines(result)
+
+if __name__ == "__main__":
+    run_ycbv()

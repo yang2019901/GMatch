@@ -80,8 +80,7 @@ def cost(matches, pairs, Me11, Me22):
     dist1 = Me11[m0[:, np.newaxis], i]
     dist2 = Me22[m1[:, np.newaxis], j]
     err = np.divide(np.abs(dist1 - dist2), dist1, out=np.ones_like(dist1), where=dist1 != 0)  # (n, d), error rate
-    res = np.max(err, axis=-1)  # (n, )
-    return res
+    return np.max(err, axis=-1)  # (n, )
 
 
 def volume_equal(matches, pairs, pts1, pts2):
@@ -222,7 +221,6 @@ def Match(match_data: util.MatchData, cache_id=None):
             thresh_feat: find a suitable threshold for feature distance
         """
         # util.plot_keypoints(img_src, img_dst, uv_src, uv_dst, Mf12, thresh_feat)
-
         matches, cost = search(pts_src, pts_dst, Mf12)
         matches_list.append((matches, cost))
 
