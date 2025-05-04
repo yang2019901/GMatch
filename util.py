@@ -2,7 +2,7 @@ import numpy as np
 import open3d as o3d
 import pickle
 import struct
-import os
+import os.path
 import json
 
 import matplotlib.pyplot as plt
@@ -406,6 +406,7 @@ def save_snapshots(snapshots, path):
     masks = np.asarray(np.stack(masks), dtype=bool)
     clds = np.asarray(np.stack(clds), dtype=np.float32)
     poses = [mat2pose(M_ex) for M_ex in M_ex_list]
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "wb") as f:
         pickle.dump((imgs, clds, masks, poses), f)
 
@@ -416,10 +417,11 @@ def vis_snapshots(snapshots):
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(cld.reshape(-1, 3))
         pcd.colors = o3d.utility.Vector3dVector(rgb.reshape(-1, 3))
+        axis_mesh = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.05)
         pcd.transform(M_pose)
+        axis_mesh.transform(M_pose)
         clds.append(pcd)
-    axis_mesh = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
-    clds.append(axis_mesh)
+        clds.append(axis_mesh)
     o3d.visualization.draw_geometries(clds)
 
 
@@ -449,53 +451,63 @@ def plot_keypoints(img1, img2, uv1, uv2, Mf12, thresh_feat):
 
     R, G, B = [1, 0, 0, 1], [0, 0.5, 0, 1], [0, 0, 1, 1]
 
+    def update_color():
+        nonlocal idx1, alts, idx2, clr1, clr2, scat1, scat2
+        clr1[:] = G
+        clr2[:] = G
+        if idx1 != -1:
+            clr1[idx1] = R
+            clr2[alts] = R
+        if idx2 != -1:
+            clr2[idx2] = B
+        scat1.set_facecolor(clr1)
+        scat2.set_facecolor(clr2)
+
     def on_click_src(event):
         nonlocal idx1, alts, idx2
         if event.inaxes != ax1:
             return
-        clr1[idx1] = G
-        clr2[alts] = G
         x, y = int(event.xdata), int(event.ydata)
         distances = np.linalg.norm(uv1 - np.array([x, y]), axis=1)
-        idx1 = np.argmin(distances)
+        ## Note: due to np.int in Match, there may be multiple idx2
+        ## so we take the last one, which is drawed last s.t. we can see the color
+        idx1 = np.argwhere(distances == distances.min())[-1].item()
         ax1.set_title(f"keypoints: {len(uv1)}, selected: {idx1}")
-        clr1[idx1] = R
         dists = Mf12[idx1]
         alts = np.where(dists < thresh_feat)[0]
-        clr2[alts] = R
         if idx2 != -1:
-            fig.suptitle(f"feature distance: {Mf12[idx1, idx2]}")
-        scat1.set_facecolor(clr1)
-        scat2.set_facecolor(clr2)
+            fig.suptitle(f"feature distance: {Mf12[idx1, idx2]:.3f}")
+        update_color()
         fig.canvas.draw()
 
     def on_click_dst(event):
         nonlocal idx1, idx2, alts
         if event.inaxes != ax2:
             return
-        if idx2 != -1:
-            clr2[idx2] = G if idx2 not in alts else R
+        ## set idx2
         x, y = int(event.xdata), int(event.ydata)
         distances = np.linalg.norm(uv2 - np.array([x, y]), axis=1)
-        idx2 = np.argmin(distances)
-        clr2[idx2] = B
+        ## Note: due to np.int in Match, there may be multiple idx2
+        ## so we take the last one, which is drawed last s.t. we can see the color
+        idx2 = np.argwhere(distances == distances.min())[-1].item()
         ax2.set_title(f"keypoints: {len(uv2)}, selected: {idx2}")
         if idx1 != -1:
-            fig.suptitle(f"feature distance: {Mf12[idx1, idx2]}")
-        scat2.set_facecolor(clr2)
+            fig.suptitle(f"feature distance: {Mf12[idx1, idx2]:.3f}")
+        update_color()
         fig.canvas.draw()
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
     ax1.imshow(img1)
     ax2.imshow(img2)
-    clr1 = np.array([G for _ in range(len(uv1))])
-    clr2 = np.array([G for _ in range(len(uv2))])
+    clr1 = np.repeat([G], len(uv1), axis=0)
+    clr2 = np.repeat([G], len(uv2), axis=0)
     scat1: collections.PathCollection = ax1.scatter(uv1[:, 0], uv1[:, 1], c=clr1, s=3)
     scat2: collections.PathCollection = ax2.scatter(uv2[:, 0], uv2[:, 1], c=clr2, s=3)
     ax1.set_title(f"keypoints: {len(uv1)}")
     ax2.set_title(f"keypoints: {len(uv2)}")
     ax1.axis("off")
     ax2.axis("off")
+    fig.suptitle(f"feature distance: ")
     fig.tight_layout()
     fig.canvas.mpl_connect("button_press_event", on_click_src)
     fig.canvas.mpl_connect("button_press_event", on_click_dst)
