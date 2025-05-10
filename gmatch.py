@@ -15,8 +15,8 @@ CACHE = {}  # cache for keypoints and features of imgs_src
 """ SIFT settings """
 detector: cv2.SIFT = cv2.SIFT_create()
 detector.setContrastThreshold(0.03)
-N_good = 32  # number of good matches candidates
-D = 24  # max search depth
+N_good = 16  # number of good matches candidates
+D = 16  # max search depth
 thresh_feat = 0.1  # threshold for feature distance, used to judge the similarity of two feature vectors
 thresh_cost = 0.08  # if the maximum cost of adding `m` to matches is less than this, accept `m`
 thresh_flip = 0.8  # threshold for flipover judgement
@@ -138,15 +138,17 @@ def search(pts1, pts2, Mf12):
 
     for i, j in pairs_good:
         matches.append((i, j))
+        pairs = pairs_simi
         c = 0
         ## step(), search for the next match
         while True:
             if len(matches) == D:
                 break
             ## filter with geometric cost
-            costs = cost(matches, pairs_simi, Me11, Me22)  # (n, )
+            # print(f"len(matches): {len(matches)}, len(pairs): {len(pairs)}")
+            costs = cost(matches, pairs, Me11, Me22)  # (n, )
             ind = np.argwhere(costs < thresh_cost).flatten()
-            pairs = pairs_simi[ind]
+            pairs = pairs[ind]
             costs = costs[ind]
             if len(pairs) == 0:
                 break
