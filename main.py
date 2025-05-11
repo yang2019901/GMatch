@@ -92,6 +92,7 @@ def solve(match_data):
     img_dst, cld_dst, mask_dst = match_data.img_dst, match_data.cld_dst, match_data.mask_dst
 
     """ solve correspondence (Note: dont use cv2.PnPRansac, it sucks) """
+    t0 = time.time()
     pcd1, pcd2 = o3d.geometry.PointCloud(), o3d.geometry.PointCloud()
     pcd1.points = o3d.utility.Vector3dVector(clds_src[idx, uv_src[:, 1], uv_src[:, 0], :])
     pcd2.points = o3d.utility.Vector3dVector(cld_dst[uv_dst[:, 1], uv_dst[:, 0], :])
@@ -99,6 +100,7 @@ def solve(match_data):
     """ Kabsch """
     estim = o3d.pipelines.registration.TransformationEstimationPointToPoint()
     mat_v2c = estim.compute_transformation(pcd1, pcd2, corres)
+    dt5 = time.time() - t0
     """ RANSAC """
     # result = o3d.pipelines.registration.registration_ransac_based_on_correspondence(
     #     pcd1, pcd2, o3d.utility.Vector2iVector(corres), 0.01
@@ -108,6 +110,7 @@ def solve(match_data):
     mat_m2c = mat_v2c @ np.linalg.inv(mat_v2m)
 
     """ create point cloud """
+    t0 = time.time()
     pcd_src, pcd_dst = o3d.geometry.PointCloud(), o3d.geometry.PointCloud()
     for i in range(len(clds_src)):
         pts = util.transform(clds_src[i][masks_src[i] != 0], poses_src[i])
@@ -115,9 +118,10 @@ def solve(match_data):
     pcd_dst.points = o3d.utility.Vector3dVector(cld_dst[mask_dst != 0].reshape(-1, 3))
 
     """ refine with icp """
-    # pcd_src = pcd_src.voxel_down_sample(voxel_size=0.002)
-    # rlt = o3d.pipelines.registration.registration_icp(pcd_src, pcd_dst, 0.01, mat_m2c)
-    # mat_m2c = rlt.transformation
+    pcd_src = pcd_src.voxel_down_sample(voxel_size=0.002)
+    rlt = o3d.pipelines.registration.registration_icp(pcd_src, pcd_dst, 0.01, mat_m2c)
+    mat_m2c = rlt.transformation
+    dt6 = time.time() - t0
 
     """ visualization """
     # pcd_src.paint_uniform_color([1, 0, 0])
@@ -128,7 +132,7 @@ def solve(match_data):
     """ store result """
     # print(f"model in camera, pos: \n{mat_m2c}")
     match_data.mat_m2c = mat_m2c
-    return
+    return dt5, dt6
 
 
 def result2record(meta_data: util.MetaData, match_data: util.MatchData):
@@ -240,10 +244,9 @@ def run_ycbv():
             meta_data.init(pt_id=pt_id, scene_id=scene_id, img_id=img_id, mask_id=mask_id)
             load(meta_data, match_data)
             t0 = time.time()
-            # cProfile.runctx("gmatch.Match(match_data, cache_id=meta_data.pt_id)", globals(), locals(), sort="cumtime")
-            gmatch.Match(match_data, cache_id=meta_data.pt_id)
-            solve(match_data)
-            dt = time.time() - t0
+            dt1, dt2, dt3, dt4 = gmatch.Match(match_data)
+            dt5, dt6 = solve(match_data)
+            dt0 = time.time() - t0
             print(f"img_id: {meta_data.img_id}, len: {len(match_data.matches_list[match_data.idx_best])}", end=", ")
 
             M_pred = match_data.mat_m2c
@@ -257,10 +260,13 @@ def run_ycbv():
 
             dist_err = np.linalg.norm(M_err[:3, 3])
             ang_err = np.arccos((np.trace(M_err[:3, :3]) - 1) / 2)
-            print(f"dist_err: {dist_err*1000:.1f} mm, ang_err: {np.rad2deg(ang_err):.1f} deg", f"dt: {dt*1000:.1f} ms")
-            result.append(f"{meta_data.img_id}, {dist_err*1000:.1f}, {np.rad2deg(ang_err):.1f}, {dt*1000:.1f}\n")
+            print(f"dist_err: {dist_err*1000:.1f} mm, ang_err: {np.rad2deg(ang_err):.1f} deg", f"dt: {dt0*1000:.1f} ms")
+            # result.append(f"{meta_data.img_id}, {dist_err*1000:.1f}, {np.rad2deg(ang_err):.1f}, {dt*1000:.1f}\n")
+            result.append(
+                f"{dist_err*1000:.1f}, {np.rad2deg(ang_err):.1f}, {dt0*1000:.1f}, {dt1*1000:.1f}, {dt2*1000:.1f}, {dt3*1000:.1f}, {dt4*1000:.1f}, {dt5*1000:.1f}, {dt6*1000:.1f}\n"
+            )
 
-        with open(f"result_ycbv_kabsch_{scene_id}_{pt_id}.csv", "w") as f:
+        with open(f"runtime_ycbv_kabsch_{scene_id}_{pt_id}.csv", "w") as f:
             f.writelines(result)
 
 

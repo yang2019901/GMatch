@@ -185,7 +185,11 @@ def Match(match_data: util.MatchData, cache_id=None):
     imgs_src, clds_src, masks_src = match_data.imgs_src, match_data.clds_src, match_data.masks_src
     img_dst, cld_dst, mask_dst = match_data.img_dst, match_data.cld_dst, match_data.mask_dst
 
+    dt1 = dt2 = dt3 = dt4 = 0
+    t0 = time.time()
     kp_dst, feat_dst = detector.detectAndCompute(img_dst, mask_dst)  # 0.3s for 1920x1080 => 0.014s for 211x200
+    dt2 = time.time() - t0
+
     if len(kp_dst) == 0:
         print("No keypoints found in img2")
         match_data.matches_list = [[]]
@@ -201,9 +205,11 @@ def Match(match_data: util.MatchData, cache_id=None):
     matches_list = []
     uvs_src = []
     for i, (img_src, cld_src, mask_src) in enumerate(zip(imgs_src, clds_src, masks_src)):
+        t0 = time.time()
         kp_src, feat_src = (
             CACHE[(cache_id, i)] if (cache_id, i) in CACHE else detector.detectAndCompute(img_src, mask_src)
         )
+        dt1 += time.time() - t0
 
         if cache_id is not None:
             CACHE[(cache_id, i)] = (kp_src, feat_src)
@@ -216,14 +222,18 @@ def Match(match_data: util.MatchData, cache_id=None):
         uvs_src.append(uv_src)
 
         """ Feature Distance Matrix (for visual similarity) """
+        t0 = time.time()
         Mf12 = feat_mat(feat_src, feat_dst)
+        dt3 += time.time() - t0
 
         """ <Tune>
             N1 and N2: plot to see whether keypoints are enough
             thresh_feat: find a suitable threshold for feature distance
         """
         # util.plot_keypoints(img_src, img_dst, uv_src, uv_dst, Mf12, thresh_feat)
+        t0 = time.time()
         matches, cost = search(pts_src, pts_dst, Mf12)
+        dt4 += time.time() - t0
         matches_list.append((matches, cost))
 
         """ visualization """
@@ -248,4 +258,4 @@ def Match(match_data: util.MatchData, cache_id=None):
     #     uv_src = uvs_src[match_data.idx_best]
     #     matches = matches_list[match_data.idx_best][0]
     #     util.plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
-    return
+    return dt1, dt2, dt3, dt4
