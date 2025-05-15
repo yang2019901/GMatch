@@ -15,7 +15,7 @@ CACHE = {}  # cache for keypoints and features of imgs_src
 """ SIFT settings """
 detector: cv2.SIFT = cv2.SIFT_create()
 detector.setContrastThreshold(0.03)
-N_good = 16  # number of good matches candidates
+T = 16  # number of good matches candidates
 D = 16  # max search depth
 thresh_feat = 0.1  # threshold for feature distance, used to judge the similarity of two feature vectors
 thresh_cost = 0.08  # if the maximum cost of adding `m` to matches is less than this, accept `m`
@@ -25,7 +25,7 @@ feat_mat = lambda feat1, feat2: sift_mat(feat1, feat2)  # feature distance matri
 
 """ ORB settings """
 # detector = cv2.ORB_create(scaleFactor=1.4)
-# N_good = 30  # number of good matches
+# T = 30  # number of good matches
 # D = 24  # max search depth
 # thresh_feat = 90  # threshold for feature distance, used to judge the similarity of two feature vectors
 # thresh_cost = 0.08  # if the maximum cost of adding `m` to matches is less than this, accept `m`
@@ -127,7 +127,7 @@ def search(pts1, pts2, Mf12):
     Me22 = np.linalg.norm(pts2[:, np.newaxis, :] - pts2, axis=-1)
 
     part_indices = (
-        np.argpartition(np.reshape(Mf12, -1), N_good)[:N_good] if N_good < n1 * n2 else np.arange(n1 * n2, dtype=int)
+        np.argpartition(np.reshape(Mf12, -1), T)[:T] if T < n1 * n2 else np.arange(n1 * n2, dtype=int)
     )
     pairs_good = np.array(np.unravel_index(part_indices, Mf12.shape)).T
     # pairs_good = np.argwhere(Mf12 < 0.1)

@@ -99,11 +99,6 @@ def solve(match_data):
     """ Kabsch """
     estim = o3d.pipelines.registration.TransformationEstimationPointToPoint()
     mat_v2c = estim.compute_transformation(pcd1, pcd2, corres)
-    """ RANSAC """
-    # result = o3d.pipelines.registration.registration_ransac_based_on_correspondence(
-    #     pcd1, pcd2, o3d.utility.Vector2iVector(corres), 0.01
-    # )
-    # mat_v2c = result.transformation
     mat_v2m = util.pose2mat(poses_src[idx])
     mat_m2c = mat_v2c @ np.linalg.inv(mat_v2m)
 
@@ -228,6 +223,7 @@ def run_ycbv():
     meta_data = util.MetaData(proj_path=os.path.dirname(os.path.abspath(__file__)), dataset="ycbv")
     match_data = util.MatchData()
 
+    result = []
     for pt_id, scene_id, mask_id in [(3, 54, 1), (12, 54, 2), (8, 58, 2), (2, 50, 0)]:
         img_folder = os.path.join(meta_data.proj_path, f"bop_data/ycbv/test/{str(scene_id).zfill(6)}/rgb")
         with open(f"bop_data/ycbv/test/{str(scene_id).zfill(6)}/scene_gt.json", "r") as f:
@@ -235,12 +231,10 @@ def run_ycbv():
         files = os.listdir(img_folder)
         imgs_id = [int(f.split(".")[0]) for f in files]
         imgs_id.sort()
-        result = []
         for img_id in imgs_id:
             meta_data.init(pt_id=pt_id, scene_id=scene_id, img_id=img_id, mask_id=mask_id)
             load(meta_data, match_data)
             t0 = time.time()
-            # cProfile.runctx("gmatch.Match(match_data, cache_id=meta_data.pt_id)", globals(), locals(), sort="cumtime")
             gmatch.Match(match_data, cache_id=meta_data.pt_id)
             solve(match_data)
             dt = time.time() - t0
@@ -255,14 +249,16 @@ def run_ycbv():
 
             M_err = np.linalg.inv(M) @ M_pred
 
-            dist_err = np.linalg.norm(M_err[:3, 3])
-            ang_err = np.arccos((np.trace(M_err[:3, :3]) - 1) / 2)
-            print(f"dist_err: {dist_err*1000:.1f} mm, ang_err: {np.rad2deg(ang_err):.1f} deg", f"dt: {dt*1000:.1f} ms")
-            result.append(f"{meta_data.img_id}, {dist_err*1000:.1f}, {np.rad2deg(ang_err):.1f}, {dt*1000:.1f}\n")
+            dist_err = np.linalg.norm(M_err[:3, 3]) * 1000
+            ang_err = np.rad2deg(np.arccos((np.trace(M_err[:3, :3]) - 1) / 2))
+            print(f"dist_err: {dist_err:.1f} mm, ang_err: {ang_err:.1f} deg", f"dt: {dt*1000:.1f} ms")
+            result.append(f"{dist_err}\n")
 
-        with open(f"result_ycbv_kabsch_{scene_id}_{pt_id}.csv", "w") as f:
-            f.writelines(result)
+    with open(f"result_D{gmatch.D}.csv", "w") as f:
+        f.writelines(result)
 
 
 if __name__ == "__main__":
-    run_ycbv()
+    for D in [3, 6, 8, 12, 16, 20, 24, 32 ]:
+        gmatch.D = D
+        run_ycbv()
