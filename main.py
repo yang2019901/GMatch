@@ -135,10 +135,10 @@ def Match(match_data: util.MatchData, cache_id=None):
     imgs_src, clds_src: (N, H, W, 3)
     img_dst, cld_dst: (H, W, 3)
     """
-    # detector: cv2.ORB = cv2.ORB_create()
-    # norm_type = cv2.NORM_HAMMING
-    detector: cv2.SIFT = cv2.SIFT_create()
-    norm_type = cv2.NORM_L2
+    detector: cv2.ORB = cv2.ORB_create()
+    norm_type = cv2.NORM_HAMMING
+    # detector: cv2.SIFT = cv2.SIFT_create()
+    # norm_type = cv2.NORM_L2
     assert len(match_data.imgs_src) > 0, "imgs_src is empty"
     """ load from match_data """
     imgs_src, img_dst = match_data.imgs_src, match_data.img_dst
