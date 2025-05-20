@@ -261,9 +261,9 @@ def Match(match_data: util.MatchData, cache_id=None):
     match_data.idx_best = np.argmax([len(matches) for matches, _ in matches_list])
 
     """ visualization """
-    if len(match_data.matches_list[match_data.idx_best]) > 0:
-        img_src = imgs_src[match_data.idx_best]
-        uv_src = uvs_src[match_data.idx_best]
-        matches = matches_list[match_data.idx_best][0]
-        util.plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
+    # if len(match_data.matches_list[match_data.idx_best]) > 0:
+    #     img_src = imgs_src[match_data.idx_best]
+    #     uv_src = uvs_src[match_data.idx_best]
+    #     matches = matches_list[match_data.idx_best][0]
+    #     util.plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
     return

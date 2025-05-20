@@ -166,15 +166,15 @@ if __name__ == "__main__":
     match_data = util.MatchData()
 
     # meta_data.init(pt_id=23, scene_id=6, img_id=0, mask_id=1)
-    meta_data.init(scene_id=1, img_id=1, pt_id=19, mask_id=12)
-    load(meta_data, match_data)
-    # t0 = time.time()
-    gmatch.Match(match_data)
-    # print(f"match time: {time.time() - t0:.3f}")
-    print(f"best loss: {match_data.cost_list[match_data.idx_best]:.3f}")
-    print(f"obj: {meta_data.pt_id}, len: {len(match_data.matches_list[match_data.idx_best])}")
-    solve(match_data)
-    exit()
+    # meta_data.init(scene_id=1, img_id=1, pt_id=19, mask_id=12)
+    # load(meta_data, match_data)
+    # # t0 = time.time()
+    # gmatch.Match(match_data)
+    # # print(f"match time: {time.time() - t0:.3f}")
+    # print(f"best loss: {match_data.cost_list[match_data.idx_best]:.3f}")
+    # print(f"obj: {meta_data.pt_id}, len: {len(match_data.matches_list[match_data.idx_best])}")
+    # solve(match_data)
+    # exit()
 
     """ bop19 test set """
     with open("targets_manual_label.json", "r") as f:
