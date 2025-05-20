@@ -137,8 +137,8 @@ import torch
 
 torch.set_grad_enabled(False)
 dev = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-extractor = SuperPoint().eval().to(dev)
-matcher = LightGlue(features="superpoint").eval().to(dev)
+extractor = SIFT().eval().to(dev)
+matcher = LightGlue(features="sift").eval().to(dev)
 
 
 def Match(match_data: util.MatchData):
