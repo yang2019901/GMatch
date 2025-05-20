@@ -6,7 +6,6 @@ import json, os.path, time
 import cProfile
 import copy
 
-import gmatch
 import util
 
 
@@ -48,8 +47,17 @@ def load(meta_data: util.MetaData, match_data: util.MatchData):
     img_dst = cv2.imread(meta_data.img_path, cv2.IMREAD_COLOR_RGB)
     depth_dst = cv2.imread(meta_data.depth_path, cv2.IMREAD_UNCHANGED)
     mask_dst = cv2.imread(meta_data.mask_path, cv2.IMREAD_UNCHANGED)
-
     cld_dst = util.depth2cld(depth_dst * 0.001 * meta_data.depth_scale, meta_data.cam_intrin)
+    """ get bbox from mask_dst """
+    ind = np.argwhere(mask_dst != 0)
+    r1, c1 = ind.min(axis=0)
+    r2, c2 = ind.max(axis=0)
+    mask_dst[r1:r2+1, c1:c2+1] = 255
+    """ crop dst things """
+    img_dst = img_dst[r1:r2+1, c1:c2+1]
+    cld_dst = cld_dst[r1:r2+1, c1:c2+1]
+    mask_dst = mask_dst[r1:r2+1, c1:c2+1]
+
     # util.vis_cld(cld_dst, img_dst)
     """ store data to match_data """
     match_data.imgs_src = imgs_src
@@ -123,6 +131,55 @@ def result2record(meta_data: util.MetaData, match_data: util.MatchData):
     return [str(scene_id), str(im_id), str(obj_id), str(score), R, t]
 
 
+from lightglue import SIFT, SuperPoint, LightGlue, viz2d
+from lightglue.utils import rbd
+import torch
+
+torch.set_grad_enabled(False)
+dev = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+extractor = SuperPoint().eval().to(dev)
+matcher = LightGlue(features="superpoint").eval().to(dev)
+
+
+def Match(match_data: util.MatchData):
+    imgs_src, img_dst = match_data.imgs_src, match_data.img_dst
+    mask_dst:np.ndarray = match_data.mask_dst
+
+    img_dst = torch.tensor(img_dst / 255.0, dtype=torch.float).permute(2, 0, 1)
+    feats1 = extractor.extract(img_dst.to(dev))
+    kpts1 = feats1["keypoints"][0].cpu()
+    matches_list = []
+    uvs_src = []
+    for i, img_src in enumerate(imgs_src):
+        img_src = torch.tensor(img_src / 255.0, dtype=torch.float).permute(2, 0, 1)
+        feats0 = extractor.extract(img_src.to(dev))
+        kpts0 = feats0["keypoints"][0].cpu()
+
+        res = matcher({"image0": feats0, "image1": feats1})
+
+        matches = res["matches"][0].cpu()
+        matches_list.append(matches)
+        uvs_src.append(np.array(kpts0, dtype=int))
+
+        # m_kpts0, m_kpts1 = kpts0[matches[..., 0]], kpts1[matches[..., 1]]
+        # viz2d.plot_images([img_src, img_dst])
+        # viz2d.plot_matches(m_kpts0, m_kpts1, color="lime", lw=0.2)
+        # viz2d.add_text(0, f'Stop after {res["stop"]} layers', fs=20)
+
+        # kpc0, kpc1 = viz2d.cm_prune(res["prune0"][0]), viz2d.cm_prune(res["prune1"][0])
+        # viz2d.plot_images([img_src, img_dst])
+        # viz2d.plot_keypoints([kpts0, kpts1], colors=[kpc0, kpc1], ps=10)
+        # plt.show()
+    idx_best = max(enumerate(matches_list), key=lambda x: len(x[1]))[0]
+    matches_best = matches_list[idx_best]
+    match_data.matches_list = matches_list
+    match_data.uvs_src = uvs_src
+    match_data.uv_dst = np.array(kpts1, dtype=int)
+    match_data.idx_best = idx_best
+    # if len(matches_best) > 3:
+    #     util.plot_matches(match_data.imgs_src[idx_best], match_data.img_dst, uvs_src[idx_best][matches_best[..., 0]], kpts1[matches_best[..., 1]])
+
+
 def process_img(meta_data: util.MetaData, match_data: util.MatchData, targets):
     """targets: a list of `target` where `target` is (mask_id, scene_id, img_id, objs_id), dtype=(int, int, int, List[int])
     meta_data, match_data: cache assigned to the function
@@ -137,7 +194,7 @@ def process_img(meta_data: util.MetaData, match_data: util.MatchData, targets):
         for obj_id in obj_ids:
             meta_data.init(pt_id=obj_id, scene_id=scene_id, img_id=img_id, mask_id=mask_id)
             load(meta_data, match_data)
-            gmatch.match(match_data, meta_data.pt_id)
+            Match(match_data)
             print(f"\tobj: {meta_data.pt_id}, len: {len(match_data.matches_list[match_data.idx_best])}")
             match_data_list.append(copy.copy(match_data))
         ## take the object with the most matches
@@ -155,8 +212,9 @@ if __name__ == "__main__":
     match_data = util.MatchData()
 
     # meta_data.init(pt_id=23, scene_id=6, img_id=0, mask_id=1)
+    # meta_data.init(scene_id=1, img_id=0, pt_id=9, mask_id=5)
     # load(meta_data, match_data)
-    # gmatch.match(match_data)
+    # Match(match_data)
     # print(f"obj: {meta_data.pt_id}, len: {len(match_data.matches_list[match_data.idx_best])}")
     # solve(match_data)
     # exit()

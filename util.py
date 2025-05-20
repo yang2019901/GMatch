@@ -428,7 +428,7 @@ def plot_matches(img1, img2, uv1, uv2):
     ax1.imshow(img1)
     ax2.imshow(img2)
     for pt1, pt2 in zip(uv1, uv2):
-        cir1 = patches.Circle(pt1, 5, color="red", fill=False)
+        cir1 = patches.Circle(pt1, 2, color="red", fill=False)
         cir2 = patches.Circle(pt2, 2, color="red", fill=False)
         ax1.add_patch(cir1)
         ax2.add_patch(cir2)
