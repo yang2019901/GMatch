@@ -323,9 +323,10 @@ def load_ply(path) -> o3d.geometry.TriangleMesh:
 
 def get_snapshots(mesh):
     """
-    snapshots: [(rgb, cld, M_ex), ...]
+    snapshots: [(rgb, cld, mask, M_ex), ...]
     rgb: (H, W, 3), 0~1
     cld: (H, W, 3), meters
+    mask: (H, W), bool
     M_ex: (4, 4)
     """
     vis = o3d.visualization.Visualizer()
