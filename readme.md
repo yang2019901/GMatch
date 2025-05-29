@@ -2,17 +2,10 @@
 
 ## 1. Introduction
 
-
-This repository implements GMatch in `gmatch.py` and provides demo code of solving pose from correspondence. The pose estimation pipeline is:
-
-**`keypoint descriptor` => `feature matcher` => `geometric solver` (=> `refiner`)**
-
-In this repository, the key part is `gmatch.search()`, which searchs geometrically consistent correspondence in 3D keypoints. It is the python implementation of the pseudo code we provide in the paper and our core innovation.
-Besides, there are some wrap-up or visualization functions that you may find handy.
-- `gmatch.Match()` is the wrap-up of `gmatch.search()` to match each of source images to the target image for pose estimation
-- `util.Solve()` demonstrates how to use Kabsch solver, RANSAC and ICP refiner to get the object's 6DoF pose w.r.t camera coordinate system in the scene image.
-- `util.plot_keypoints()` to visualize keypoints and mark locally matched points interactively under given `thresh_feat`, which is helpful when adapting GMatch to new keypoint descriptors.
-
+This repository implements GMatch and the pose estimation pipeline built upon it. Related code files are explained below.
+- `gmatch.py`: implements geometrically constrained feature matching with ORB/SIFT descriptor, where `gmatch.search()` performs guided search as described in our paper and `gmatch.Match()` is its wrap-up to match each of source images to the target image for pose estimation.
+- `util.py`: provides utility dataclass `MatchData` for passing arguments and storing match result, `Solve()` for solving pose from match result, and visualization codes, etc.
+- `demo.py`: demonstrates the whole pose estimation pipeline built upon GMatch, from data preparation to the final estimated pose. 
 
 ## 2. Installation
 
@@ -22,7 +15,10 @@ pip install -r requirements.txt
 ```
 
 ## 3. Usage
-We provide `demo.py` for demonstration purpose and you can run it with `python demo.py`.
+We provide `demo.py` for demonstration purpose. You can run it with
+```
+python demo.py
+```
 
 > Note: To understand how to use GMatch for pose estimation, we strongly recommend you to read `demo.py` line by line.
 
