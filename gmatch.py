@@ -1,4 +1,4 @@
-""" Use ORB/SIFT detector to match features between two images """
+"""Use ORB/SIFT detector to match features between two images"""
 
 import numpy as np
 import cv2
@@ -109,8 +109,18 @@ def flipover(matches, pairs, pts1, pts2):
     v2_1 = pts2[matches[-2][1]] - pts2[matches[-1][1]]
     v2_2 = pts2[pairs[:, 1]] - pts2[matches[-1][1]]
     n1, n2 = np.cross(v1_1, v1_2), np.cross(v2_1, v2_2)
-    n1 = np.divide(n1, np.linalg.norm(n1, axis=-1, keepdims=True), out=np.zeros_like(n1), where=n1 != 0)
-    n2 = np.divide(n2, np.linalg.norm(n2, axis=-1, keepdims=True), out=np.zeros_like(n2), where=n2 != 0)
+    n1 = np.divide(
+        n1,
+        np.linalg.norm(n1, axis=-1, keepdims=True),
+        out=np.zeros_like(n1),
+        where=n1 != 0,
+    )
+    n2 = np.divide(
+        n2,
+        np.linalg.norm(n2, axis=-1, keepdims=True),
+        out=np.zeros_like(n2),
+        where=n2 != 0,
+    )
     # n1 = np.cross(v1_1, v1_2) / np.linalg.norm(v1_1) / np.linalg.norm(v1_2)
     # n2 = np.cross(v2_1, v2_2) / np.linalg.norm(v2_1) / np.linalg.norm(v2_2)
     flags = np.bitwise_and(n1[:, 2] * n2[:, 2] < 0, np.abs(n1[:, 2] - n2[:, 2]) > thresh_flip)
@@ -126,9 +136,7 @@ def search(pts1, pts2, Mf12):
     Me11 = np.linalg.norm(pts1[:, np.newaxis, :] - pts1, axis=-1)
     Me22 = np.linalg.norm(pts2[:, np.newaxis, :] - pts2, axis=-1)
 
-    part_indices = (
-        np.argpartition(np.reshape(Mf12, -1), T)[:T] if T < n1 * n2 else np.arange(n1 * n2, dtype=int)
-    )
+    part_indices = np.argpartition(np.reshape(Mf12, -1), T)[:T] if T < n1 * n2 else np.arange(n1 * n2, dtype=int)
     pairs_good = np.array(np.unravel_index(part_indices, Mf12.shape)).T
     # pairs_good = np.argwhere(Mf12 < 0.1)
 
@@ -182,10 +190,18 @@ def Match(match_data: util.MatchData, cache_id=None):
     global detector, CACHE
     assert len(match_data.imgs_src) > 0, "imgs_src is empty"
     """ load from match_data """
-    imgs_src, clds_src, masks_src = match_data.imgs_src, match_data.clds_src, match_data.masks_src
-    img_dst, cld_dst, mask_dst = match_data.img_dst, match_data.cld_dst, match_data.mask_dst
+    imgs_src, clds_src, masks_src = (
+        match_data.imgs_src,
+        match_data.clds_src,
+        match_data.masks_src,
+    )
+    img_dst, cld_dst, mask_dst = (
+        match_data.img_dst,
+        match_data.cld_dst,
+        match_data.mask_dst,
+    )
 
-    kp_dst, feat_dst = detector.detectAndCompute(img_dst, mask_dst)  # 0.3s for 1920x1080 => 0.014s for 211x200
+    kp_dst, feat_dst = detector.detectAndCompute(img_dst, mask_dst)
     if len(kp_dst) == 0:
         print("No keypoints found in img2")
         match_data.matches_list = [[]]
