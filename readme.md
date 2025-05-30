@@ -65,5 +65,5 @@ To test different combination of NN/GMatch/LightGlue and SIFT/ORB/SuperPoint, us
 
 
 ## Tips
-- To render depth (e.g. `get_snapshot()`), it's recommended to set `LIBGL_ALWAYS_SOFTWARE` to `1`. In RTX4060 + Ubuntu20.04-WSL, Hardware rendering leads to abnormal depth.
+- To render depth (e.g. `get_snapshot()`), it's recommended to `export LIBGL_ALWAYS_SOFTWARE = 1`. In RTX4060 + Ubuntu20.04-WSL, Hardware rendering leads to abnormal depth.
 - Codes below `""" visualization """` or `""" <Tune> xxx """` can be safely commented/uncommented to see how's the program going.
