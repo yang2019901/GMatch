@@ -1,4 +1,4 @@
-"""Use ORB/SIFT detector to match features between two images"""
+"""Implements GMatch to match keypoints extracted by ORB/SIFT detector."""
 
 import numpy as np
 import cv2
@@ -34,12 +34,11 @@ feat_mat = lambda feat1, feat2: sift_mat(feat1, feat2)  # feature distance matri
 
 
 def orb_mat(feat1, feat2):
-    """compute feature distance matrix `Mf` for ORB, whose metric is Hamming distance.
+    """Compute feature distance matrix `Mf` for ORB, whose metric is Hamming distance.
     > Mh[i, j] == HamDist(feat1[i], feat2[j])
 
-    - Input:
-        feat1: (n1, 32), uint8
-        feat2: (n2, 32), uint8
+    - feat1: (n1, 32), uint8
+    - feat2: (n2, 32), uint8
     """
     global HAM_TAB
     ## broadcast feat1 and feat2
@@ -55,13 +54,12 @@ def orb_mat(feat1, feat2):
 
 
 def sift_mat(feat1, feat2):
-    """compute feature distance matrix `Mf` for SIFT, whose metric is Euclidean distance.
+    """Compute feature distance matrix `Mf` for SIFT, whose metric is Euclidean distance.
 
     Note: feat1 and feat2 will be L1-normalized
 
-    - Input:
-        feat1: (n1, 128), integer stored in float32
-        feat2: (n2, 128), integer stored in float32
+    - feat1: (n1, 128), integer stored in float32
+    - feat2: (n2, 128), integer stored in float32
     """
     feat1_ = feat1 / np.sum(feat1, axis=-1, keepdims=True)
     feat2_ = feat2 / np.sum(feat2, axis=-1, keepdims=True)
@@ -70,7 +68,8 @@ def sift_mat(feat1, feat2):
 
 
 def cost(matches, pairs, Me11, Me22):
-    """cost function for distance matrix.
+    """Cost function to differ two distance matrices.
+
     matches: (d, 2), pairs: (n, 2), Me11: (n1, n1), Me22: (n2, n2)
     """
     if len(matches) == 0:
@@ -99,7 +98,8 @@ def volume_equal(matches, pairs, pts1, pts2):
 
 
 def flipover(matches, pairs, pts1, pts2):
-    """flipover judgement
+    """Flipover judgement.
+
     pairs: (n, 2), return (n, ) boolean array"""
     global thresh_flip
     if len(matches) < 2:
@@ -128,7 +128,7 @@ def flipover(matches, pairs, pts1, pts2):
 
 
 def search(pts1, pts2, Mf12):
-    """search with geometric constraints (distance matrix and flip-over removal)"""
+    """Search with geometric constraints (distance matrix and flipover judgement)."""
     n1, n2 = Mf12.shape
     matches = []
     rlt = []
@@ -182,10 +182,11 @@ def search(pts1, pts2, Mf12):
 
 
 def Match(match_data: util.MatchData, cache_id=None):
-    """match each of imgs_src with img_dst in match_data and store the result in it;
-        keypoints and features for imgs_src will be cached with cache_id if provided
-    imgs_src, clds_src: (N, H, W, 3)
-    img_dst, cld_dst: (H, W, 3)
+    """Match each of imgs_src with img_dst in match_data and store the result in it;
+    keypoints and features for imgs_src will be cached with cache_id if provided.
+
+    - imgs_src, clds_src: (N, H, W, 3)
+    - img_dst, cld_dst: (H, W, 3)
     """
     global detector, CACHE
     assert len(match_data.imgs_src) > 0, "imgs_src is empty"

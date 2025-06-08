@@ -1,8 +1,11 @@
+"""Provides core data structure `MatchData` for GMatch, and utility functions useful in our pose estimation pipeline,
+e.g., CAD-related and point cloud processing, visualization.
+"""
+
 import numpy as np
 import open3d as o3d
 import pickle
 import os.path
-import json
 from dataclasses import dataclass
 
 import matplotlib.pyplot as plt
@@ -12,8 +15,9 @@ from scipy.spatial.transform import Rotation
 
 @dataclass
 class MatchData:
-    """input data for GMatch"""
+    """Data structure for matching keypoints and estimating pose."""
 
+    ## input data for GMatch
     imgs_src = []
     clds_src = []
     masks_src = []
@@ -21,7 +25,8 @@ class MatchData:
     img_dst = None
     cld_dst = None
     mask_dst = None
-    """GMatch result"""
+
+    ## GMatch result
     matches_list = []  # list of matches, see gmatch.match_features
     cost_list = []  # list of cost, ranging 0-1, see gmatch.match_features
     uvs_src = []  # keypoints extracted from each source image
@@ -31,7 +36,7 @@ class MatchData:
 
 
 def Solve(match_data: MatchData):
-    """solve correspondence with the best match in match_data"""
+    """Solve correspondence with the best match in match_data."""
 
     ii = match_data.idx_best
     matches = match_data.matches_list[ii]
@@ -110,7 +115,7 @@ def transform(pts, pose):
 
 
 def depth2cld(depth, intrisic):
-    """convert depth to point cloud"""
+    """Convert depth to point cloud."""
     intrin = np.array(intrisic, dtype=np.float32).reshape(3, 3)
     z = np.asarray(depth, np.float32)
     u, v = np.meshgrid(range(z.shape[1]), range(z.shape[0]))
@@ -120,7 +125,7 @@ def depth2cld(depth, intrisic):
 
 
 def vis_cld(clds, colors=None, poses=None):
-    """transform and visualize point clouds"""
+    """Transform and visualize point clouds."""
     _clds = [transform(cld, pose).reshape(-1, 3) for cld, pose in zip(clds, poses)] if poses is not None else clds
 
     pcd = o3d.geometry.PointCloud()
@@ -135,42 +140,26 @@ def vis_cld(clds, colors=None, poses=None):
 
 def get_snapshots(mesh):
     """Render the mesh from six views and return snapshots.
-    mesh: o3d.geometry.TriangleMesh
-    snapshots: [(rgb, cld, mask, M_ex), ...]
-    rgb: (H, W, 3), 0~1
-    cld: (H, W, 3), meters
-    mask: (H, W), bool
-    M_ex: (4, 4)
+
+    - mesh: o3d.geometry.TriangleMesh
+    - snapshots: [(rgb, cld, mask, M_ex), ...]
+    - rgb: (H, W, 3), 0~1
+    - cld: (H, W, 3), meters
+    - mask: (H, W), bool
+    - M_ex: (4, 4)
     """
     vis = o3d.visualization.Visualizer()
     vis.create_window(visible=False, width=640, height=480)
     vis.add_geometry(mesh)
 
-    # 设置相机参数
+    ## 6-axis sampling
     camera_params = [
-        ## 6-axis sampling
         {"front": [1, 0, 0], "lookat": [0, 0, 0], "up": [0, 0, 1]},  # x+
         {"front": [-1, 0, 0], "lookat": [0, 0, 0], "up": [0, 0, 1]},  # x-
         {"front": [0, 1, 0], "lookat": [0, 0, 0], "up": [0, 0, 1]},  # y+
         {"front": [0, -1, 0], "lookat": [0, 0, 0], "up": [0, 0, 1]},  # y-
         {"front": [0, 0, 1], "lookat": [0, 0, 0], "up": [0, 1, 0]},  # z+
         {"front": [0, 0, -1], "lookat": [0, 0, 0], "up": [0, 1, 0]},  # z-
-        ## rotated 6-axis sampling
-        # {"front": [1, 1, 0], "lookat": [0, 0, 0], "up": [0, 0, 1]},
-        # {"front": [-1, 1, 0], "lookat": [0, 0, 0], "up": [0, 0, 1]},
-        # {"front": [-1, -1, 0], "lookat": [0, 0, 0], "up": [0, 0, 1]},
-        # {"front": [1, -1, 0], "lookat": [0, 0, 0], "up": [0, 0, 1]},
-        # {"front": [0, 0, 1], "lookat": [0, 0, 0], "up": [0, 1, 0]},
-        # {"front": [0, 0, -1], "lookat": [0, 0, 0], "up": [0, 1, 0]},
-        ## 8-axis sampling
-        # {"front": [1, 1, 1], "lookat": [0, 0, 0], "up": [0, -1, 1]},
-        # {"front": [1, 1, -1], "lookat": [0, 0, 0], "up": [0, 1, 1]},
-        # {"front": [1, -1, -1], "lookat": [0, 0, 0], "up": [0, -1, 1]},
-        # {"front": [1, -1, 1], "lookat": [0, 0, 0], "up": [0, 1, 1]},
-        # {"front": [-1, 1, 1], "lookat": [0, 0, 0], "up": [0, -1, 1]},
-        # {"front": [-1, 1, -1], "lookat": [0, 0, 0], "up": [0, 1, 1]},
-        # {"front": [-1, -1, -1], "lookat": [0, 0, 0], "up": [0, -1, 1]},
-        # {"front": [-1, -1, 1], "lookat": [0, 0, 0], "up": [0, 1, 1]},
     ]
 
     snapshots = []
@@ -210,10 +199,11 @@ def get_snapshots(mesh):
 
 def save_snapshots(snapshots, path):
     """Save snapshots to a file.
-    imgs: (N, H, W, 3), 0~255, uint8
-    clds: (N, H, W, 3), meters, float32
-    masks: (N, H, W), bool
-    poses: [(pos, quat), ...]
+
+    - imgs: (N, H, W, 3), 0~255, uint8
+    - clds: (N, H, W, 3), meters, float32
+    - masks: (N, H, W), bool
+    - poses: [(pos, quat), ...]
     """
     rgbs, clds, masks, M_ex_list = zip(*snapshots)
     imgs = np.asarray(np.stack(rgbs) * 255, dtype=np.uint8)
@@ -227,11 +217,12 @@ def save_snapshots(snapshots, path):
 
 def vis_snapshots(snapshots):
     """Visualize snapshots.
-    snapshots: [(rgb, cld, mask, M_ex), ...]
-    rgb: (H, W, 3), 0~1
-    cld: (H, W, 3), meters
-    mask: (H, W), bool
-    M_ex: (4, 4), camera extrinsic matrix
+
+    - snapshots: [(rgb, cld, mask, M_ex), ...]
+    - rgb: (H, W, 3), 0~1
+    - cld: (H, W, 3), meters
+    - mask: (H, W), bool
+    - M_ex: (4, 4), camera extrinsic matrix
     """
     clds = []
     for rgb, cld, _, M_pose in snapshots:
@@ -273,10 +264,12 @@ def plot_matches(img1, img2, uv1, uv2):
 
 
 def plot_keypoints(img1, img2, uv1, uv2, Mf12, thresh_feat):
-    """Plot keypoints between two images, and mark locally matched points interactively. Useful for try out the appropriate thresh_feat for Mf12."""
-    idx1 = -1
-    alts = []
-    idx2 = -1
+    """Plot keypoints between two images, and mark locally matched points interactively.
+    Useful for try out the appropriate thresh_feat for Mf12.
+    """
+    idx1 = -1  # index of selected keypoint in img1
+    alts = []  # indices of locally matched keypoints in img2
+    idx2 = -1  # index of selected keypoint in img2
 
     R, G, B = [1, 0, 0, 1], [0, 0.5, 0, 1], [0, 0, 1, 1]
 
