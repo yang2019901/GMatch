@@ -18,18 +18,18 @@ class MatchData:
     """Data structure for matching keypoints and estimating pose."""
 
     ## input data for GMatch
-    imgs_src = []
-    clds_src = []
-    masks_src = []
-    poses_src = []
-    img_dst = None
-    cld_dst = None
-    mask_dst = None
+    imgs_src: list
+    clds_src: list
+    masks_src: list
+    poses_src: list
+    img_dst: np.ndarray
+    cld_dst: np.ndarray
+    mask_dst: np.ndarray
 
     ## GMatch result
-    matches_list = []  # list of matches, see gmatch.match_features
-    cost_list = []  # list of cost, ranging 0-1, see gmatch.match_features
-    uvs_src = []  # keypoints extracted from each source image
+    matches_list = None  # list of matches, see gmatch.match_features
+    cost_list = None  # list of cost, ranging 0-1, see gmatch.match_features
+    uvs_src = None  # keypoints extracted from each source image
     uv_dst = None  # keypoints extracted from the destination image
     idx_best = None  # index of the best matches (longest)
     mat_m2c = None  # model to camera transformation matrix, 4x4
