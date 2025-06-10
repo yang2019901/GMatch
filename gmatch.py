@@ -240,6 +240,7 @@ def Match(match_data: util.MatchData, cache_id=None):
             thresh_feat: find a suitable threshold for feature distance
         """
         # util.plot_keypoints(img_src, img_dst, uv_src, uv_dst, Mf12, thresh_feat)
+
         matches, cost = search(pts_src, pts_dst, Mf12)
         matches_list.append((matches, cost))
 

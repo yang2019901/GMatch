@@ -22,7 +22,7 @@ However, you may need a preprocessing module with a object detection network or 
 
 This repository implements GMatch and the pose estimation pipeline built upon it. Related code files are explained below.
 - `gmatch.py`: implements geometrically constrained feature matching with ORB/SIFT descriptor, where `gmatch.search()` performs guided search as described in our paper and `gmatch.Match()` is its wrap-up to match each of source images to the target image for pose estimation.
-- `util.py`: provides utility dataclass `MatchData` for passing arguments and storing match result, `Solve()` for solving pose from match result, and visualization codes, etc.
+- `util.py`: provides dataclass `MatchData` for passing arguments and storing match result, `Solve()` for solving pose from match result, `Refine()` for ICP refinement, and visualization codes, etc.
 - `demo.py`: demonstrates the whole pose estimation pipeline built upon GMatch, from data preparation to the final estimated pose. 
 
 ## 2. Installation
@@ -40,7 +40,7 @@ python demo.py
 
 > **Note:** To understand how to use GMatch for pose estimation, we strongly recommend you to read `demo.py` line by line.
 
-In brief, it first renders from six views to get images and point clouds as source, followed by loading RGB-D images as target. Then it formats the data to put them into `MatchData` and pass this to `gmatch.Match()`. Finally, with the match result stored in `MatchData`, `util.Solve()` gives the estimated object pose w.r.t scene camera coordinate system.
+In brief, it first renders from six views to get images and point clouds as source, followed by loading RGB-D images as target. Then it formats the data to put them into `MatchData` and pass this to `gmatch.Match()`. Finally, with the match result stored in `MatchData`, `util.Solve()` (and optional `util.Refine()`) gives the estimated object pose w.r.t scene camera coordinate system.
 
 We also put some visualization codes into `demo.py` so that you can see how each part goes.
 

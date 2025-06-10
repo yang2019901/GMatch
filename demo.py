@@ -16,7 +16,7 @@ o3d.visualization.draw_geometries([mesh], mesh_show_wireframe=True, mesh_show_ba
 snapshots = util.get_snapshots(mesh)
 
 ## visualize the snapshots
-util.vis_snapshots(snapshots)
+# util.vis_snapshots(snapshots)
 
 ## parse snapshots and convert imgs/clds/masks/poses to numpy arrays
 imgs_src, clds_src, masks_src, M_ex_list = zip(*snapshots)
@@ -77,11 +77,14 @@ pts1_m = match_data.clds_src[i][uv1_m[:, 1], uv1_m[:, 0]]
 pts2_m = match_data.cld_dst[uv2_m[:, 1], uv2_m[:, 0]]
 
 ## visualize the matches
-util.plot_matches(match_data.imgs_src[i], match_data.img_dst, uv1_m, uv2_m)
+# util.plot_matches(match_data.imgs_src[i], match_data.img_dst, uv1_m, uv2_m)
 
 
 """ Solve the pose """
 util.Solve(match_data)
+
+## ICP refinement (optional)
+util.Refine(match_data)
 
 ## get SE(3) matrix from model to camera, aka the estimated pose of the object w.r.t. scene camera coordinate system.
 mat_m2c = match_data.mat_m2c

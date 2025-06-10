@@ -27,8 +27,8 @@ class MatchData:
     mask_dst: np.ndarray
 
     ## GMatch result
-    matches_list = None  # list of matches, see gmatch.match_features
-    cost_list = None  # list of cost, ranging 0-1, see gmatch.match_features
+    matches_list = None  # list of matches, see gmatch.Match
+    cost_list = None  # list of distance matrix cost, ranging 0-1, see gmatch.Match
     uvs_src = None  # keypoints extracted from each source image
     uv_dst = None  # keypoints extracted from the destination image
     idx_best = None  # index of the best matches (longest)
@@ -41,57 +41,68 @@ def Solve(match_data: MatchData):
     ii = match_data.idx_best
     matches = match_data.matches_list[ii]
 
+    ## to solve pose from 3d-3d correspondence, we need at least 3 matches
     if len(matches) < 3:
         print("Warning: Pose estimation failed, not enough matches")
         match_data.mat_m2c = np.eye(4)
         return
 
-    ## load src and dst data
+    ## alias for src and dst data
     clds_src, masks_src, poses_src = match_data.clds_src, match_data.masks_src, match_data.poses_src
     img_dst, cld_dst, mask_dst = match_data.img_dst, match_data.cld_dst, match_data.mask_dst
 
+    ## get 3d keypoints from correspondence
     uv1_m = match_data.uvs_src[ii][matches[:, 0]]
     uv2_m = match_data.uv_dst[matches[:, 1]]
-    pts1_m = clds_src[ii, uv1_m[:, 1], uv1_m[:, 0], :]
+    pts1_m = clds_src[ii][uv1_m[:, 1], uv1_m[:, 0], :]
     pts2_m = cld_dst[uv2_m[:, 1], uv2_m[:, 0], :]
-
-    """ solve correspondence with Kabsch algorithm """
     pcd1, pcd2 = o3d.geometry.PointCloud(), o3d.geometry.PointCloud()
     pcd1.points = o3d.utility.Vector3dVector(pts1_m)
     pcd2.points = o3d.utility.Vector3dVector(pts2_m)
     corres = o3d.utility.Vector2iVector([[i, i] for i in range(len(uv1_m))])
 
-    ## Kabsch algorithm
+    ## solve correspondence with Kabsch algorithm
     estim = o3d.pipelines.registration.TransformationEstimationPointToPoint()
     mat_v2c = estim.compute_transformation(pcd1, pcd2, corres)
 
     ## get SE(3) matrix from view to model.
     mat_v2m = pose2mat(poses_src[ii])
+
     ## get SE(3) matrix from model to camera, aka the estimated pose of the object w.r.t. scene camera coordinate system.
-    mat_m2c = mat_v2c @ np.linalg.inv(mat_v2m)
+    match_data.mat_m2c = mat_v2c @ np.linalg.inv(mat_v2m)
 
-    """ create point cloud """
-    # pcd_src, pcd_dst = o3d.geometry.PointCloud(), o3d.geometry.PointCloud()
-    # for i in range(len(clds_src)):
-    #     pts = transform(clds_src[i][masks_src[i] != 0], poses_src[i])
-    #     pcd_src.points.extend(o3d.utility.Vector3dVector(pts.reshape(-1, 3)))
-    # pcd_dst.points = o3d.utility.Vector3dVector(cld_dst[mask_dst != 0].reshape(-1, 3))
 
-    """ refine with icp """
-    # pcd_src = pcd_src.voxel_down_sample(voxel_size=0.002)
-    # rlt = o3d.pipelines.registration.registration_icp(pcd_src, pcd_dst, 0.01, mat_m2c)
-    # mat_m2c = rlt.transformation
+def Refine(match_data: MatchData):
+    """Refine the pose estimation with ICP. match_data.mat_m2c is used as the initial pose and will be written in place.
 
-    """ visualization """
-    # pcd_src.paint_uniform_color([1, 0, 0])
-    # pcd_src.transform(mat_m2c)
-    # pcd_dst.colors = o3d.utility.Vector3dVector(img_dst[mask_dst != 0].reshape(-1, 3) / 255)
-    # o3d.visualization.draw_geometries([pcd_src, pcd_dst], lookat=[0, 0, 1], front=[0, 0, -1], up=[0, -1, 0], zoom=1)
+    Note: Tune `voxel_size` for your model and data.
+    """
 
-    """ store result """
-    # print(f"model in camera, pos: \n{mat_m2c}")
+    ## alias for src and dst data
+    clds_src, cld_dst = match_data.clds_src, match_data.cld_dst
+    imgs_src, img_dst = match_data.imgs_src, match_data.img_dst
+    masks_src, mask_dst = match_data.masks_src, match_data.mask_dst
+    poses_src = match_data.poses_src
+    mat_m2c = match_data.mat_m2c
+
+    ## create point cloud
+    pcd_src, pcd_dst = o3d.geometry.PointCloud(), o3d.geometry.PointCloud()
+    for i in range(len(clds_src)):
+        pts = transform(clds_src[i][masks_src[i] != 0], poses_src[i])
+        pcd_src.points.extend(o3d.utility.Vector3dVector(pts.reshape(-1, 3)))
+    pcd_dst.points = o3d.utility.Vector3dVector(cld_dst[mask_dst != 0].reshape(-1, 3))
+
+    ## downsample point cloud and compute normals
+    voxel_size = 0.002  # unit: meter
+    pcd_src_down = pcd_src.voxel_down_sample(voxel_size=voxel_size)
+    pcd_dst_down = pcd_dst.voxel_down_sample(voxel_size=voxel_size)
+
+    ## refine with colored icp
+    rlt = o3d.pipelines.registration.registration_icp(pcd_src_down, pcd_dst_down, 5 * voxel_size, mat_m2c)
+    mat_m2c = rlt.transformation
+
+    ## write result in place
     match_data.mat_m2c = mat_m2c
-    return
 
 
 def pose2mat(pose):
@@ -243,8 +254,8 @@ def plot_matches(img1, img2, uv1, uv2):
     ax1.imshow(img1)
     ax2.imshow(img2)
     for pt1, pt2 in zip(uv1, uv2):
-        cir1 = patches.Circle(pt1, 5, color="red", fill=False)
-        cir2 = patches.Circle(pt2, 2, color="red", fill=False)
+        cir1 = patches.Circle(pt1, 3, color="red", fill=False)
+        cir2 = patches.Circle(pt2, 3, color="red", fill=False)
         ax1.add_patch(cir1)
         ax2.add_patch(cir2)
         l = patches.ConnectionPatch(
