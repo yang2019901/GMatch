@@ -18,7 +18,10 @@ detector.setContrastThreshold(0.03)
 T = 16  # number of good matches candidates
 D = 16  # max search depth
 thresh_feat = 0.1  # threshold for feature distance, used to judge the similarity of two feature vectors
-thresh_cost = 0.08  # if the maximum cost of adding `m` to matches is less than this, accept `m`
+
+thresh_geom_ratio = 0.08  # threshold for geometric cost, applied to 3d distance error ratio when attempting to add `m` to matches.
+thresh_geom_abs = 0.01  # threshold for geometric cost, applied to 3d distance directly when attempting to add `m` to matches. (unit: meter)
+
 thresh_flip = 0.8  # threshold for flipover judgement
 feat_mat = lambda feat1, feat2: sift_mat(feat1, feat2)  # feature distance matrix
 
@@ -28,7 +31,10 @@ feat_mat = lambda feat1, feat2: sift_mat(feat1, feat2)  # feature distance matri
 # T = 30  # number of good matches
 # D = 24  # max search depth
 # thresh_feat = 90  # threshold for feature distance, used to judge the similarity of two feature vectors
-# thresh_cost = 0.08  # if the maximum cost of adding `m` to matches is less than this, accept `m`
+
+thresh_geom_ratio = 0.08  # threshold for geometric cost, applied to 3d distance error ratio when attempting to add `m` to matches.
+thresh_geom_abs = 0.01  # threshold for geometric cost, applied to 3d distance directly when attempting to add `m` to matches. (unit: meter)
+
 # thresh_flip = 0.8  # threshold for flipover judgement
 # feat_mat = lambda feat1, feat2: orb_mat(feat1, feat2)  # feature distance matrix
 
@@ -78,7 +84,8 @@ def cost(matches, pairs, Me11, Me22):
     i, j = zip(*matches)  # (d, )
     dist1 = Me11[m0[:, np.newaxis], i]
     dist2 = Me22[m1[:, np.newaxis], j]
-    err = np.divide(np.abs(dist1 - dist2), dist1, out=np.ones_like(dist1), where=dist1 != 0)  # (n, d), error rate
+    ## Note: for err to be smaller than thresh_geom_ratio, np.abs(dist1 - dist2) must be smaller than thresh_geom_abs
+    err = (1e-5 + np.abs(dist1 - dist2)) / (np.minimum(dist1, thresh_geom_abs / thresh_geom_ratio) + 1e-5)  # (n, d), error rate
     return np.max(err, axis=-1)  # (n, )
 
 
@@ -155,7 +162,7 @@ def search(pts1, pts2, Mf12):
             ## filter with geometric cost
             # print(f"len(matches): {len(matches)}, len(pairs): {len(pairs)}")
             costs = cost(matches, pairs, Me11, Me22)  # (n, )
-            ind = np.argwhere(costs < thresh_cost).flatten()
+            ind = np.argwhere(costs < thresh_geom_ratio).flatten()
             pairs = pairs[ind]
             costs = costs[ind]
             if len(pairs) == 0:

@@ -72,10 +72,12 @@ def Solve(match_data: MatchData):
     match_data.mat_m2c = mat_v2c @ np.linalg.inv(mat_v2m)
 
 
-def Refine(match_data: MatchData):
+def Refine(match_data: MatchData, voxel_size=0.01):
     """Refine the pose estimation with ICP. match_data.mat_m2c is used as the initial pose and will be written in place.
 
-    Note: Tune `voxel_size` for your model and data.
+    - voxel_size: the voxel size for downsampling point cloud. unit: meter. Smaller value makes the refinement more accurate but slower.
+
+    Note: Tune `voxel_size` for your model and data. unit: meter.
     """
 
     ## alias for src and dst data
@@ -93,9 +95,8 @@ def Refine(match_data: MatchData):
     pcd_dst.points = o3d.utility.Vector3dVector(cld_dst[mask_dst != 0].reshape(-1, 3))
 
     ## downsample point cloud and compute normals
-    voxel_size = 0.002  # unit: meter
-    pcd_src_down = pcd_src.voxel_down_sample(voxel_size=voxel_size)
-    pcd_dst_down = pcd_dst.voxel_down_sample(voxel_size=voxel_size)
+    pcd_src_down = pcd_src.voxel_down_sample(voxel_size)
+    pcd_dst_down = pcd_dst.voxel_down_sample(voxel_size)
 
     ## refine with colored icp
     rlt = o3d.pipelines.registration.registration_icp(pcd_src_down, pcd_dst_down, 5 * voxel_size, mat_m2c)
@@ -230,14 +231,20 @@ def vis_snapshots(snapshots):
     """Visualize snapshots.
 
     - snapshots: [(rgb, cld, mask, M_ex), ...]
-    - rgb: (H, W, 3), 0~1
+    - rgb: (H, W, 3), 0~1 or 0~255
     - cld: (H, W, 3), meters
-    - mask: (H, W), bool
+    - mask: (H, W), all non-zero pixel will be displayed
     - M_ex: (4, 4), camera extrinsic matrix
     """
+
     clds = []
-    for rgb, cld, _, M_pose in snapshots:
+    for rgb, cld, mask, M_pose in snapshots:
         pcd = o3d.geometry.PointCloud()
+        if rgb.dtype == np.uint8:
+            rgb = rgb / 255.0
+        if mask is not None:
+            cld = cld[mask != 0]
+            rgb = rgb[mask != 0]
         pcd.points = o3d.utility.Vector3dVector(cld.reshape(-1, 3))
         pcd.colors = o3d.utility.Vector3dVector(rgb.reshape(-1, 3))
         axis_mesh = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.05)
