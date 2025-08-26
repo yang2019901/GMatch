@@ -1,10 +1,11 @@
-""" Use ORB/SIFT detector to match features between two images """
+"""Use ORB/SIFT detector to match features between two images"""
 
 import numpy as np
+import open3d as o3d
 import cv2
+import logging
+
 import util
-import time
-import matplotlib.pyplot as plt
 
 
 HAM_TAB = np.array(
@@ -173,6 +174,24 @@ def search(pts1, pts2, Mf12):
     return (rlt, rlt_cost) if len(rlt) >= 3 else (np.array([]), 1)
 
 
+def ransac_search(pts1, pts2, Mf12):
+    import ransac
+
+    pairs_simi = np.argwhere(Mf12 < thresh_feat)
+    logging.debug(f"Found {len(pairs_simi)} similar pairs.")
+
+    if len(pairs_simi) == 0:
+        return (np.array([]), 1)
+
+    o3d.pipelines.registration.registration_ransac_based_on_correspondence
+    result = ransac.registration_ransac_based_on_correspondence(pts1, pts2, pairs_simi, 0.008, max_iteration=1000)
+    if result is None or result.correspondence_set is None:
+        logging.warning("RANSAC failed to find enough correspondences.")
+        return (np.array([]), 1)
+
+    return np.array(result.correspondence_set), result.inlier_rmse
+
+
 def Match(match_data: util.MatchData, cache_id=None):
     """match each of imgs_src with img_dst in match_data and store the result in it;
         keypoints and features for imgs_src will be cached with cache_id if provided
@@ -185,10 +204,7 @@ def Match(match_data: util.MatchData, cache_id=None):
     imgs_src, clds_src, masks_src = match_data.imgs_src, match_data.clds_src, match_data.masks_src
     img_dst, cld_dst, mask_dst = match_data.img_dst, match_data.cld_dst, match_data.mask_dst
 
-    dt1 = dt2 = dt3 = dt4 = 0
-    t0 = time.time()
     kp_dst, feat_dst = detector.detectAndCompute(img_dst, mask_dst)  # 0.3s for 1920x1080 => 0.014s for 211x200
-    dt2 = time.time() - t0
 
     if len(kp_dst) == 0:
         print("No keypoints found in img2")
@@ -205,11 +221,9 @@ def Match(match_data: util.MatchData, cache_id=None):
     matches_list = []
     uvs_src = []
     for i, (img_src, cld_src, mask_src) in enumerate(zip(imgs_src, clds_src, masks_src)):
-        t0 = time.time()
         kp_src, feat_src = (
             CACHE[(cache_id, i)] if (cache_id, i) in CACHE else detector.detectAndCompute(img_src, mask_src)
         )
-        dt1 += time.time() - t0
 
         if cache_id is not None:
             CACHE[(cache_id, i)] = (kp_src, feat_src)
@@ -222,18 +236,14 @@ def Match(match_data: util.MatchData, cache_id=None):
         uvs_src.append(uv_src)
 
         """ Feature Distance Matrix (for visual similarity) """
-        t0 = time.time()
         Mf12 = feat_mat(feat_src, feat_dst)
-        dt3 += time.time() - t0
 
         """ <Tune>
             N1 and N2: plot to see whether keypoints are enough
             thresh_feat: find a suitable threshold for feature distance
         """
         # util.plot_keypoints(img_src, img_dst, uv_src, uv_dst, Mf12, thresh_feat)
-        t0 = time.time()
-        matches, cost = search(pts_src, pts_dst, Mf12)
-        dt4 += time.time() - t0
+        matches, cost = ransac_search(pts_src, pts_dst, Mf12)
         matches_list.append((matches, cost))
 
         """ visualization """
@@ -258,4 +268,3 @@ def Match(match_data: util.MatchData, cache_id=None):
     #     uv_src = uvs_src[match_data.idx_best]
     #     matches = matches_list[match_data.idx_best][0]
     #     util.plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
-    return dt1, dt2, dt3, dt4

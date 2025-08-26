@@ -22,7 +22,7 @@ def render(meta_data):
     # axis_mesh = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
     # o3d.visualization.draw_geometries([mesh, axis_mesh])
     snapshots = util.get_snapshots(mesh)
-    util.vis_snapshots(snapshots)
+    # util.vis_snapshots(snapshots)
     util.save_snapshots(snapshots, meta_data.pt_path)
     print(f"saved to {meta_data.pt_path}, bbox: {bbox} mm")
 
@@ -76,7 +76,7 @@ def load(meta_data: util.MetaData, match_data: util.MatchData):
     match_data.mask_dst = mask_dst
 
 
-def solve(match_data):
+def solve(match_data, icp_refine=False):
     """solve correspondence with the best match in match_data"""
     idx = match_data.idx_best
     matches = match_data.matches_list[idx]
@@ -89,10 +89,9 @@ def solve(match_data):
     uv_src = match_data.uvs_src[idx][matches[:, 0]]
     uv_dst = match_data.uv_dst[matches[:, 1]]
     clds_src, masks_src, poses_src = match_data.clds_src, match_data.masks_src, match_data.poses_src
-    img_dst, cld_dst, mask_dst = match_data.img_dst, match_data.cld_dst, match_data.mask_dst
+    cld_dst, mask_dst = match_data.cld_dst, match_data.mask_dst
 
-    """ solve correspondence (Note: dont use cv2.PnPRansac, it sucks) """
-    t0 = time.time()
+    """ solve correspondence """
     pcd1, pcd2 = o3d.geometry.PointCloud(), o3d.geometry.PointCloud()
     pcd1.points = o3d.utility.Vector3dVector(clds_src[idx, uv_src[:, 1], uv_src[:, 0], :])
     pcd2.points = o3d.utility.Vector3dVector(cld_dst[uv_dst[:, 1], uv_dst[:, 0], :])
@@ -100,17 +99,11 @@ def solve(match_data):
     """ Kabsch """
     estim = o3d.pipelines.registration.TransformationEstimationPointToPoint()
     mat_v2c = estim.compute_transformation(pcd1, pcd2, corres)
-    dt5 = time.time() - t0
-    """ RANSAC """
-    # result = o3d.pipelines.registration.registration_ransac_based_on_correspondence(
-    #     pcd1, pcd2, o3d.utility.Vector2iVector(corres), 0.01
-    # )
-    # mat_v2c = result.transformation
+
     mat_v2m = util.pose2mat(poses_src[idx])
     mat_m2c = mat_v2c @ np.linalg.inv(mat_v2m)
 
     """ create point cloud """
-    t0 = time.time()
     pcd_src, pcd_dst = o3d.geometry.PointCloud(), o3d.geometry.PointCloud()
     for i in range(len(clds_src)):
         pts = util.transform(clds_src[i][masks_src[i] != 0], poses_src[i])
@@ -118,21 +111,14 @@ def solve(match_data):
     pcd_dst.points = o3d.utility.Vector3dVector(cld_dst[mask_dst != 0].reshape(-1, 3))
 
     """ refine with icp """
-    pcd_src = pcd_src.voxel_down_sample(voxel_size=0.002)
-    rlt = o3d.pipelines.registration.registration_icp(pcd_src, pcd_dst, 0.01, mat_m2c)
-    mat_m2c = rlt.transformation
-    dt6 = time.time() - t0
-
-    """ visualization """
-    # pcd_src.paint_uniform_color([1, 0, 0])
-    # pcd_src.transform(mat_m2c)
-    # pcd_dst.colors = o3d.utility.Vector3dVector(img_dst[mask_dst != 0].reshape(-1, 3) / 255)
-    # o3d.visualization.draw_geometries([pcd_src, pcd_dst], lookat=[0, 0, 1], front=[0, 0, -1], up=[0, -1, 0], zoom=1)
+    if icp_refine:
+        pcd_src = pcd_src.voxel_down_sample(voxel_size=0.002)
+        rlt = o3d.pipelines.registration.registration_icp(pcd_src, pcd_dst, 0.01, mat_m2c)
+        mat_m2c = rlt.transformation
 
     """ store result """
     # print(f"model in camera, pos: \n{mat_m2c}")
     match_data.mat_m2c = mat_m2c
-    return dt5, dt6
 
 
 def result2record(meta_data: util.MetaData, match_data: util.MatchData):
@@ -167,7 +153,7 @@ def process_img(meta_data: util.MetaData, match_data: util.MatchData, targets):
         k = max(enumerate(match_data_list), key=lambda x: len(x[1].matches_list[x[1].idx_best]))[0]
         match_data = match_data_list[k]
         meta_data.init(pt_id=obj_ids[k], scene_id=scene_id, img_id=img_id, mask_id=mask_id)
-        solve(match_data)
+        solve(match_data, icp_refine=True)
         record_list.append(result2record(meta_data, match_data))
     timespan = time.time() - t0
     return [f'{", ".join(rec)}, {timespan:.2f}\n' for rec in record_list]
@@ -177,12 +163,11 @@ def run_hope():
     meta_data = util.MetaData(proj_path=os.path.dirname(os.path.abspath(__file__)), dataset="hope")
     match_data = util.MatchData()
 
-    # meta_data.init(pt_id=23, scene_id=6, img_id=0, mask_id=1)
-    # meta_data.init(scene_id=1, img_id=1, pt_id=19, mask_id=12)
+    # meta_data.init(scene_id=1, img_id=0, pt_id=16, mask_id=0)
     # load(meta_data, match_data)
-    # # t0 = time.time()
+    # t0 = time.time()
     # gmatch.Match(match_data)
-    # # print(f"match time: {time.time() - t0:.3f}")
+    # print(f"match time: {time.time() - t0:.3f}")
     # print(f"best loss: {match_data.cost_list[match_data.idx_best]:.3f}")
     # print(f"obj: {meta_data.pt_id}, len: {len(match_data.matches_list[match_data.idx_best])}")
     # solve(match_data)
@@ -197,8 +182,7 @@ def run_hope():
     objs_id = []
     targets = []
     targets_list = []
-    ## Obs1: mask_id starts from 0
-    ## Obs2: in test_targets_bop19.json, the order of obj_id is just the same as mask file suffix order (aka, mask_id, here)
+
     for _, line in enumerate(content):
         if img_id_last is None:
             img_id_last = line["im_id"]
@@ -227,48 +211,5 @@ def run_hope():
             f.flush()
 
 
-def run_ycbv():
-    """test perception stability (precision, run-time, etc) on video"""
-    meta_data = util.MetaData(proj_path=os.path.dirname(os.path.abspath(__file__)), dataset="ycbv")
-    match_data = util.MatchData()
-
-    for pt_id, scene_id, mask_id in [(3, 54, 1), (12, 54, 2), (8, 58, 2), (2, 50, 0)]:
-        img_folder = os.path.join(meta_data.proj_path, f"bop_data/ycbv/test/{str(scene_id).zfill(6)}/rgb")
-        with open(f"bop_data/ycbv/test/{str(scene_id).zfill(6)}/scene_gt.json", "r") as f:
-            content = json.load(f)
-        files = os.listdir(img_folder)
-        imgs_id = [int(f.split(".")[0]) for f in files]
-        imgs_id.sort()
-        result = []
-        for img_id in imgs_id:
-            meta_data.init(pt_id=pt_id, scene_id=scene_id, img_id=img_id, mask_id=mask_id)
-            load(meta_data, match_data)
-            t0 = time.time()
-            dt1, dt2, dt3, dt4 = gmatch.Match(match_data)
-            dt5, dt6 = solve(match_data)
-            dt0 = time.time() - t0
-            print(f"img_id: {meta_data.img_id}, len: {len(match_data.matches_list[match_data.idx_best])}", end=", ")
-
-            M_pred = match_data.mat_m2c
-
-            M = np.eye(4)
-            gt = next((x for x in content[str(img_id)] if x["obj_id"] == pt_id))
-            M[:3, :3] = np.array(gt["cam_R_m2c"]).reshape(3, 3)
-            M[:3, 3] = np.array(gt["cam_t_m2c"]) * 0.001
-
-            M_err = np.linalg.inv(M) @ M_pred
-
-            dist_err = np.linalg.norm(M_err[:3, 3])
-            ang_err = np.arccos((np.trace(M_err[:3, :3]) - 1) / 2)
-            print(f"dist_err: {dist_err*1000:.1f} mm, ang_err: {np.rad2deg(ang_err):.1f} deg", f"dt: {dt0*1000:.1f} ms")
-            # result.append(f"{meta_data.img_id}, {dist_err*1000:.1f}, {np.rad2deg(ang_err):.1f}, {dt*1000:.1f}\n")
-            result.append(
-                f"{dist_err*1000:.1f}, {np.rad2deg(ang_err):.1f}, {dt0*1000:.1f}, {dt1*1000:.1f}, {dt2*1000:.1f}, {dt3*1000:.1f}, {dt4*1000:.1f}, {dt5*1000:.1f}, {dt6*1000:.1f}\n"
-            )
-
-        with open(f"runtime_ycbv_kabsch_{scene_id}_{pt_id}.csv", "w") as f:
-            f.writelines(result)
-
-
 if __name__ == "__main__":
-    run_ycbv()
+    run_hope()
