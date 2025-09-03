@@ -3,6 +3,7 @@ import numpy as np
 import pyrealsense2 as rs
 import open3d as o3d
 import os.path as osp
+import os, sys
 import matplotlib.pyplot as plt
 
 import gmatch, util
@@ -11,7 +12,7 @@ import gmatch, util
 H, W = 480, 640
 
 
-def record():
+def record(output_file):
     pipeline = rs.pipeline()
     config = rs.config()
     config.enable_stream(rs.stream.depth, W, H, rs.format.z16, 30)
@@ -42,7 +43,7 @@ def record():
             v, _ = points.get_vertices(), points.get_texture_coordinates()
             xyz = np.asanyarray(v).view(np.float32).reshape(H, W, 3)
 
-            cv2.imshow("RGB", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+            # cv2.imshow("RGB", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
             depth = np.asanyarray(aligned_depth_frame.get_data())
             cv2.imshow("depth", depth / 1000.0)
             key = cv2.waitKey(1)
@@ -50,6 +51,7 @@ def record():
                 break
             elif key == ord("s"):
                 # save as a key frame
+                print("record(): a key frame saved.")
                 records.append((rgb, xyz))
     finally:
         pipeline.stop()
@@ -59,7 +61,7 @@ def record():
         print("No records captured.")
         return
 
-    with open("records.pkl", "wb") as f:
+    with open(output_file, "wb") as f:
         pickle.dump(records, f)
 
 
@@ -86,10 +88,13 @@ def calibrate(records):
             mask_dst=mask_dst,
         )
         t0 = time.time()
-        gmatch.Match(match_data, cache_id="jar")
+        global obj_name
+        gmatch.Match(match_data, cache_id=obj_name)
         t1 = time.time()
-        print(f"Match with frame No.{match_data.idx_best}: {t1 - t0:.3f} seconds.")
-        if match_data.cost_list[match_data.idx_best] > 0.08:
+        idx = match_data.idx_best
+        cost_list = match_data.cost_list
+        print(f"Match with frame No.{idx}: {t1 - t0:.3f} seconds. Best cost {cost_list[idx]:.3f}")
+        if cost_list[idx] >= 1:
             continue
         util.Solve(match_data)
         ## update the source data
@@ -138,20 +143,28 @@ def visualize_point_clouds_with_toggle(point_clouds):
 
 
 if __name__ == "__main__":
-    if not osp.exists("records.pkl"):
-        record()
+    cache_folder = './cache'
+    os.makedirs(cache_folder, exist_ok=True)
+    obj_name = sys.argv[1] if len(sys.argv) > 1 else 'default_object'
+    raw_file = osp.join(cache_folder, f"{obj_name}_raw.pkl")
+    model_file = osp.join(cache_folder, f"{obj_name}.pt")
 
-    records = pickle.load(open("records.pkl", "rb"))
+    if not osp.exists(raw_file):
+        record(raw_file)
 
-    if not osp.exists("jar.pt"):
-        rgbs, clds, masks, poses = calibrate(records)
-        M_list = [util.pose2mat(pose) for pose in poses]
-        masks = [np.where((cld[..., 2] > 1e-2) & (cld[..., 2] < 0.5), 255, 0).astype(np.uint8) for cld in clds]
-        snapshots = list(zip(rgbs, clds, masks, M_list))
-        with open("jar.pt", "wb") as f:
-            pickle.dump(snapshots, f)
+    records = pickle.load(open(raw_file, "rb"))
 
-    snapshots = pickle.load(open("jar.pt", "rb"))
+    rgbs, clds, masks, poses = calibrate(records)
+    M_list = [util.pose2mat(pose) for pose in poses]
+
+    D_near, D_far = 0.1, 2.0
+    masks = [np.where((cld[..., 2] > D_near) & (cld[..., 2] < D_far), 255, 0).astype(np.uint8) for cld in clds]
+
+    snapshots = list(zip(rgbs, clds, masks, M_list))
+    with open(model_file, "wb") as f:
+        pickle.dump(snapshots, f)
+
+    snapshots = pickle.load(open(model_file, "rb"))
 
     pcds = []
     for rgb, cld, mask, M in snapshots:
