@@ -127,7 +127,7 @@ def transform(pts, pose):
 
 
 def depth2cld(depth, intrisic):
-    """Convert depth to point cloud."""
+    """Convert depth (unit: meter) to point cloud."""
     intrin = np.array(intrisic, dtype=np.float32).reshape(3, 3)
     z = np.asarray(depth, np.float32)
     u, v = np.meshgrid(range(z.shape[1]), range(z.shape[0]))

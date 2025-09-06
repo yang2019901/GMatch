@@ -43,7 +43,7 @@ def record(output_file):
             v, _ = points.get_vertices(), points.get_texture_coordinates()
             xyz = np.asanyarray(v).view(np.float32).reshape(H, W, 3)
 
-            # cv2.imshow("RGB", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+            cv2.imshow("RGB", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
             depth = np.asanyarray(aligned_depth_frame.get_data())
             cv2.imshow("depth", depth / 1000.0)
             key = cv2.waitKey(1)

@@ -2,27 +2,27 @@
 
 import numpy as np
 import cv2
-import util
 import time
 import matplotlib.pyplot as plt
+import sys, os
+
+sys.path.append(os.path.dirname(__file__))
+
+import util
 
 
 HAM_TAB = np.array(
     [bin(i).count("1") for i in range(256)], dtype=np.uint8
-)  # used to compute hamming distance, only ORB uses it now
+)  # for computing hamming distance, only ORB uses it now
 CACHE = {}  # cache for keypoints and features of imgs_src
+
 
 """ SIFT settings """
 detector: cv2.SIFT = cv2.SIFT_create()
-detector.setContrastThreshold(0.03)
-T = 16  # number of good matches candidates
-D = 16  # max search depth
+# detector.setContrastThreshold(0.03)
+T = 32  # number of good matches candidates
+D = 24  # max search depth
 thresh_feat = 0.1  # threshold for feature distance, used to judge the similarity of two feature vectors
-
-thresh_geom_ratio = 0.08  # threshold for geometric cost, applied to 3d distance error ratio when attempting to add `m` to matches.
-thresh_geom_abs = 0.01  # threshold for geometric cost, applied to 3d distance directly when attempting to add `m` to matches. (unit: meter)
-
-thresh_flip = 0.8  # threshold for flipover judgement
 feat_mat = lambda feat1, feat2: sift_mat(feat1, feat2)  # feature distance matrix
 
 
@@ -31,12 +31,16 @@ feat_mat = lambda feat1, feat2: sift_mat(feat1, feat2)  # feature distance matri
 # T = 30  # number of good matches
 # D = 24  # max search depth
 # thresh_feat = 90  # threshold for feature distance, used to judge the similarity of two feature vectors
-
-thresh_geom_ratio = 0.08  # threshold for geometric cost, applied to 3d distance error ratio when attempting to add `m` to matches.
-thresh_geom_abs = 0.01  # threshold for geometric cost, applied to 3d distance directly when attempting to add `m` to matches. (unit: meter)
-
-# thresh_flip = 0.8  # threshold for flipover judgement
 # feat_mat = lambda feat1, feat2: orb_mat(feat1, feat2)  # feature distance matrix
+
+
+""" GMatch settings """
+## threshold for geometric cost, applied to 3d distance error ratio when attempting to add `m` to matches.
+thresh_geom_ratio = 0.08  
+## threshold for geometric cost, applied to 3d distance directly when attempting to add `m` to matches. (unit: meter)
+thresh_geom_abs = 0.02  
+## threshold for flipover judgement
+thresh_flip = 0.8
 
 
 def orb_mat(feat1, feat2):
@@ -85,7 +89,9 @@ def cost(matches, pairs, Me11, Me22):
     dist1 = Me11[m0[:, np.newaxis], i]
     dist2 = Me22[m1[:, np.newaxis], j]
     ## Note: for err to be smaller than thresh_geom_ratio, np.abs(dist1 - dist2) must be smaller than thresh_geom_abs
-    err = (1e-5 + np.abs(dist1 - dist2)) / (np.minimum(dist1, thresh_geom_abs / thresh_geom_ratio) + 1e-5)  # (n, d), error rate
+    err = (1e-5 + np.abs(dist1 - dist2)) / (
+        np.minimum(dist1, thresh_geom_abs / thresh_geom_ratio) + 1e-5
+    )  # (n, d), error rate
     return np.max(err, axis=-1)  # (n, )
 
 
@@ -188,9 +194,10 @@ def search(pts1, pts2, Mf12):
     return (rlt, rlt_cost) if len(rlt) >= 3 else (np.array([]), 1)
 
 
-def Match(match_data: util.MatchData, cache_id=None):
+def Match(match_data: util.MatchData, cache_id=None, debug=-1):
     """Match each of imgs_src with img_dst in match_data and store the result in it;
     keypoints and features for imgs_src will be cached with cache_id if provided.
+    debug: -1, 0, 1, 2, bigger value means more debug info and -1 means none
 
     - imgs_src, clds_src: (N, H, W, 3)
     - img_dst, cld_dst: (H, W, 3)
@@ -246,17 +253,19 @@ def Match(match_data: util.MatchData, cache_id=None):
             N1 and N2: plot to see whether keypoints are enough
             thresh_feat: find a suitable threshold for feature distance
         """
-        # util.plot_keypoints(img_src, img_dst, uv_src, uv_dst, Mf12, thresh_feat)
+        if debug >= 1:
+            util.plot_keypoints(img_src, img_dst, uv_src, uv_dst, Mf12, thresh_feat)
 
         matches, cost = search(pts_src, pts_dst, Mf12)
         matches_list.append((matches, cost))
 
         """ visualization """
-        # if len(matches) < 3:
-        #     print(f"\timgs_src[{i}]: matches NOT found.")
-        # else:
-        #     print(f"\timgs_src[{i}]: matches found. depth {len(matches)}, cost {cost:.3f}")
-        #     util.plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
+        if debug >= 2:
+            if len(matches) < 3:
+                print(f"\timgs_src[{i}]: matches NOT found.")
+            else:
+                print(f"\timgs_src[{i}]: matches found. depth {len(matches)}, cost {cost:.3f}")
+                util.plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
 
         if len(matches) == D:
             break
@@ -268,9 +277,10 @@ def Match(match_data: util.MatchData, cache_id=None):
     match_data.idx_best = np.argmax([len(matches) for matches, _ in matches_list])
 
     """ visualization """
-    # if len(match_data.matches_list[match_data.idx_best]) > 0:
-    #     img_src = imgs_src[match_data.idx_best]
-    #     uv_src = uvs_src[match_data.idx_best]
-    #     matches = matches_list[match_data.idx_best][0]
-    #     util.plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
+    if debug >= 0:
+        if len(match_data.matches_list[match_data.idx_best]) > 0:
+            img_src = imgs_src[match_data.idx_best]
+            uv_src = uvs_src[match_data.idx_best]
+            matches = matches_list[match_data.idx_best][0]
+            util.plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
     return
