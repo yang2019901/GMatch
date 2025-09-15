@@ -124,7 +124,7 @@ def registration_ransac_based_on_correspondence(
         try:
             transformation = estimation_method(source_points, target_points, sampled_corres)
         except np.linalg.LinAlgError:
-            continue  # 数值不稳定跳过
+            continue
 
         # Step 3: checker (omitted for simplicity)
         # if checkers: ...

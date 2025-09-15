@@ -163,10 +163,10 @@ def run_hope():
     meta_data = util.MetaData(proj_path=os.path.dirname(os.path.abspath(__file__)), dataset="hope")
     match_data = util.MatchData()
 
-    # meta_data.init(scene_id=1, img_id=0, pt_id=16, mask_id=0)
+    # meta_data.init(scene_id=1, img_id=0, pt_id=2, mask_id=2)
     # load(meta_data, match_data)
     # t0 = time.time()
-    # gmatch.Match(match_data)
+    # gmatch.Match(match_data, debug=-1)
     # print(f"match time: {time.time() - t0:.3f}")
     # print(f"best loss: {match_data.cost_list[match_data.idx_best]:.3f}")
     # print(f"obj: {meta_data.pt_id}, len: {len(match_data.matches_list[match_data.idx_best])}")

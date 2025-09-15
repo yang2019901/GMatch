@@ -32,7 +32,7 @@ class MetaData:
         mask_name = str(self.mask_id).zfill(6)
 
         self.model_path = os.path.join(self.proj_path, f"bop_data/{self.dataset}/models/{model_name}.ply")
-        self.pt_path = os.path.join(self.proj_path, f"{self.dataset}/{self.pt_id}.pt")
+        self.pt_path = os.path.join(self.proj_path, f"cache/{self.pt_id}.pt")
         self.img_path = os.path.join(self.proj_path, f"bop_data/{self.dataset}/test/{scene_name}/rgb/{img_name}.png")
         self.depth_path = os.path.join(
             self.proj_path, f"bop_data/{self.dataset}/test/{scene_name}/depth/{img_name}.png"

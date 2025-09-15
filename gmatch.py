@@ -3,7 +3,7 @@
 import numpy as np
 import open3d as o3d
 import cv2
-import logging
+import logging, time
 
 import util
 
@@ -16,8 +16,8 @@ CACHE = {}  # cache for keypoints and features of imgs_src
 """ SIFT settings """
 detector: cv2.SIFT = cv2.SIFT_create()
 detector.setContrastThreshold(0.03)
-N_good = 16  # number of good matches candidates
-D = 16  # max search depth
+N_good = 32  # number of good matches candidates
+D = 24  # max search depth
 thresh_feat = 0.1  # threshold for feature distance, used to judge the similarity of two feature vectors
 thresh_cost = 0.08  # if the maximum cost of adding `m` to matches is less than this, accept `m`
 thresh_flip = 0.8  # threshold for flipover judgement
@@ -134,6 +134,7 @@ def search(pts1, pts2, Mf12):
     # pairs_good = np.argwhere(Mf12 < 0.1)
 
     pairs_simi = np.argwhere(Mf12 < thresh_feat)
+    logging.info(f"Found {len(pairs_simi)} similar pairs.")
     if len(pairs_simi) == 0:
         return np.array([]), 1
 
@@ -178,12 +179,11 @@ def ransac_search(pts1, pts2, Mf12):
     import ransac
 
     pairs_simi = np.argwhere(Mf12 < thresh_feat)
-    logging.debug(f"Found {len(pairs_simi)} similar pairs.")
+    logging.info(f"Found {len(pairs_simi)} similar pairs.")
 
     if len(pairs_simi) == 0:
         return (np.array([]), 1)
 
-    o3d.pipelines.registration.registration_ransac_based_on_correspondence
     result = ransac.registration_ransac_based_on_correspondence(pts1, pts2, pairs_simi, 0.008, max_iteration=1000)
     if result is None or result.correspondence_set is None:
         logging.warning("RANSAC failed to find enough correspondences.")
@@ -192,7 +192,42 @@ def ransac_search(pts1, pts2, Mf12):
     return np.array(result.correspondence_set), result.inlier_rmse
 
 
-def Match(match_data: util.MatchData, cache_id=None):
+def teaserpp_search(pts1, pts2, Mf12):
+    import teaserpp_python
+
+    pairs_simi = np.argwhere(Mf12 < thresh_feat)
+    logging.info(f"Found {len(pairs_simi)} similar pairs.")
+
+    if len(pairs_simi) == 0:
+        return (np.array([]), 1)
+    
+    src = pts1[pairs_simi[:, 0]].T
+    dst = pts2[pairs_simi[:, 1]].T
+
+    solver_params = teaserpp_python.RobustRegistrationSolver.Params()
+    solver_params.cbar2 = 1.0
+    solver_params.noise_bound = 0.003
+    solver_params.estimate_scaling = False
+    solver_params.inlier_selection_mode = \
+        teaserpp_python.RobustRegistrationSolver.INLIER_SELECTION_MODE.PMC_EXACT
+    solver_params.rotation_tim_graph = \
+        teaserpp_python.RobustRegistrationSolver.INLIER_GRAPH_FORMULATION.CHAIN
+    solver_params.rotation_estimation_algorithm = \
+        teaserpp_python.RobustRegistrationSolver.ROTATION_ESTIMATION_ALGORITHM.GNC_TLS
+    solver_params.rotation_gnc_factor = 1.4
+    solver_params.rotation_max_iterations = 10000
+    solver_params.rotation_cost_threshold = 1e-16
+    solver = teaserpp_python.RobustRegistrationSolver(solver_params)
+    
+    solver.solve(src, dst)
+    solution = solver.getSolution()
+    R = solution.rotation.reshape(3, 3)
+    t = solution.translation.reshape(3, 1)
+    mask = np.linalg.norm(R @ src + t - dst, axis=0) < 0.003
+    return np.array(pairs_simi[mask]), 0
+
+
+def Match(match_data: util.MatchData, cache_id=None, debug=-1):
     """match each of imgs_src with img_dst in match_data and store the result in it;
         keypoints and features for imgs_src will be cached with cache_id if provided
     imgs_src, clds_src: (N, H, W, 3)
@@ -242,16 +277,18 @@ def Match(match_data: util.MatchData, cache_id=None):
             N1 and N2: plot to see whether keypoints are enough
             thresh_feat: find a suitable threshold for feature distance
         """
-        # util.plot_keypoints(img_src, img_dst, uv_src, uv_dst, Mf12, thresh_feat)
-        matches, cost = ransac_search(pts_src, pts_dst, Mf12)
+        if debug > 1:
+            util.plot_keypoints(img_src, img_dst, uv_src, uv_dst, Mf12, thresh_feat)
+        matches, cost = teaserpp_search(pts_src, pts_dst, Mf12)
         matches_list.append((matches, cost))
 
         """ visualization """
-        # if len(matches) < 3:
-        #     print(f"\timgs_src[{i}]: matches NOT found.")
-        # else:
-        #     print(f"\timgs_src[{i}]: matches found. depth {len(matches)}, cost {cost:.3f}")
-        #     util.plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
+        if debug > 0:
+            if len(matches) < 3:
+                print(f"\timgs_src[{i}]: matches NOT found.")
+            else:
+                print(f"\timgs_src[{i}]: matches found. depth {len(matches)}, cost {cost:.3f}")
+                util.plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
 
         if len(matches) == D:
             break
@@ -263,8 +300,8 @@ def Match(match_data: util.MatchData, cache_id=None):
     match_data.idx_best = np.argmax([len(matches) for matches, _ in matches_list])
 
     """ visualization """
-    # if len(match_data.matches_list[match_data.idx_best]) > 0:
-    #     img_src = imgs_src[match_data.idx_best]
-    #     uv_src = uvs_src[match_data.idx_best]
-    #     matches = matches_list[match_data.idx_best][0]
-    #     util.plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
+    if debug > -1 and len(match_data.matches_list[match_data.idx_best]) > 0:
+        img_src = imgs_src[match_data.idx_best]
+        uv_src = uvs_src[match_data.idx_best]
+        matches = matches_list[match_data.idx_best][0]
+        util.plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
