@@ -12,6 +12,7 @@ HAM_TAB = np.array(
     [bin(i).count("1") for i in range(256)], dtype=np.uint8
 )  # used to compute hamming distance, only ORB uses it now
 CACHE = {}  # cache for keypoints and features of imgs_src
+logging.basicConfig(level=logging.WARN, force=True)
 
 """ SIFT settings """
 detector: cv2.SIFT = cv2.SIFT_create()
@@ -95,7 +96,7 @@ def volume_equal(matches, pairs, pts1, pts2):
     v2 = pts2[pairs[:, 1]] - pts2[m[0][1]]  # (n, 3)
     V1 = np.sum(S1 * v1, axis=-1)  # (n, )
     V2 = np.sum(S2 * v2, axis=-1)  # (n, )
-    flags = np.abs(V1 - V2) < 1e-5  # unit: m^3
+    flags = np.abs(V1 - V2) < 1e-5
     return flags
 
 
@@ -112,13 +113,11 @@ def flipover(matches, pairs, pts1, pts2):
     n1, n2 = np.cross(v1_1, v1_2), np.cross(v2_1, v2_2)
     n1 = np.divide(n1, np.linalg.norm(n1, axis=-1, keepdims=True), out=np.zeros_like(n1), where=n1 != 0)
     n2 = np.divide(n2, np.linalg.norm(n2, axis=-1, keepdims=True), out=np.zeros_like(n2), where=n2 != 0)
-    # n1 = np.cross(v1_1, v1_2) / np.linalg.norm(v1_1) / np.linalg.norm(v1_2)
-    # n2 = np.cross(v2_1, v2_2) / np.linalg.norm(v2_1) / np.linalg.norm(v2_2)
     flags = np.bitwise_and(n1[:, 2] * n2[:, 2] < 0, np.abs(n1[:, 2] - n2[:, 2]) > thresh_flip)
     return flags
 
 
-def search(pts1, pts2, Mf12):
+def gmatch_search(pts1, pts2, Mf12):
     """search with geometric constraints (distance matrix and flip-over removal)"""
     n1, n2 = Mf12.shape
     matches = []
@@ -139,35 +138,42 @@ def search(pts1, pts2, Mf12):
         return np.array([]), 1
 
     for i, j in pairs_good:
-        matches.append((i, j))
         pairs = pairs_simi
+        costs = np.zeros(len(pairs)) # each pair v.s. matches[:-1]
+        matches = [(i, j)]
         c = 0
         ## step(), search for the next match
         while True:
             if len(matches) == D:
                 break
+
+            ## update with dynamic programming, Cost(m, matches) = max{ Cost(m, matches[:-1]), Cost(m, matches[-1]) }
+            costs = np.maximum(costs, cost([matches[-1]], pairs, Me11, Me22))  # (n, )
+
             ## filter with geometric cost
-            # print(f"len(matches): {len(matches)}, len(pairs): {len(pairs)}")
-            costs = cost(matches, pairs, Me11, Me22)  # (n, )
             ind = np.argwhere(costs < thresh_cost).flatten()
             pairs = pairs[ind]
             costs = costs[ind]
+
             if len(pairs) == 0:
                 break
+
+            ## filter with flip-over test
             flags = ~flipover(matches, pairs, pts1, pts2)  # (n, )
-            pairs = pairs[flags]
-            costs = costs[flags]
-            if len(pairs) == 0:
+            pairs_ = pairs[flags]
+            costs_ = costs[flags]
+
+            if len(pairs_) == 0:
                 break
+
             ## get the best match
-            best = np.argmin(costs)
-            c = max(c, costs[best])
-            matches.append(tuple(pairs[best]))
+            best = np.argmin(costs_)
+            c = max(c, costs_[best])
+            matches.append(tuple(pairs_[best]))
 
         if len(matches) > len(rlt):
             rlt = matches
             rlt_cost = c
-        matches = []
         if len(rlt) == D:
             break
 
@@ -200,7 +206,7 @@ def teaserpp_search(pts1, pts2, Mf12):
 
     if len(pairs_simi) == 0:
         return (np.array([]), 1)
-    
+
     src = pts1[pairs_simi[:, 0]].T
     dst = pts2[pairs_simi[:, 1]].T
 
@@ -208,17 +214,16 @@ def teaserpp_search(pts1, pts2, Mf12):
     solver_params.cbar2 = 1.0
     solver_params.noise_bound = 0.003
     solver_params.estimate_scaling = False
-    solver_params.inlier_selection_mode = \
-        teaserpp_python.RobustRegistrationSolver.INLIER_SELECTION_MODE.PMC_EXACT
-    solver_params.rotation_tim_graph = \
-        teaserpp_python.RobustRegistrationSolver.INLIER_GRAPH_FORMULATION.CHAIN
-    solver_params.rotation_estimation_algorithm = \
+    solver_params.inlier_selection_mode = teaserpp_python.RobustRegistrationSolver.INLIER_SELECTION_MODE.PMC_EXACT
+    solver_params.rotation_tim_graph = teaserpp_python.RobustRegistrationSolver.INLIER_GRAPH_FORMULATION.CHAIN
+    solver_params.rotation_estimation_algorithm = (
         teaserpp_python.RobustRegistrationSolver.ROTATION_ESTIMATION_ALGORITHM.GNC_TLS
+    )
     solver_params.rotation_gnc_factor = 1.4
     solver_params.rotation_max_iterations = 10000
     solver_params.rotation_cost_threshold = 1e-16
     solver = teaserpp_python.RobustRegistrationSolver(solver_params)
-    
+
     solver.solve(src, dst)
     solution = solver.getSolution()
     R = solution.rotation.reshape(3, 3)
@@ -279,7 +284,7 @@ def Match(match_data: util.MatchData, cache_id=None, debug=-1):
         """
         if debug > 1:
             util.plot_keypoints(img_src, img_dst, uv_src, uv_dst, Mf12, thresh_feat)
-        matches, cost = teaserpp_search(pts_src, pts_dst, Mf12)
+        matches, cost = gmatch_search(pts_src, pts_dst, Mf12)
         matches_list.append((matches, cost))
 
         """ visualization """

@@ -27,7 +27,7 @@ def render(meta_data):
     print(f"saved to {meta_data.pt_path}, bbox: {bbox} mm")
 
 
-def load(meta_data: util.MetaData, match_data: util.MatchData):
+def load(meta_data: util.MetaData, match_data: util.MatchData, blur=False):
     """load by meta_data and store to match_data"""
     if not os.path.exists(meta_data.pt_path):
         render(meta_data)
@@ -42,7 +42,10 @@ def load(meta_data: util.MetaData, match_data: util.MatchData):
         else:
             imgs_src, clds_src, masks_src, poses_src = data
             masks_src = masks_src.astype(np.uint8) * 255
-        imgs_src = [cv2.GaussianBlur(img, (5, 5), 0) for img in imgs_src]
+
+        if blur:
+            imgs_src = [cv2.GaussianBlur(img, (5, 5), 0) for img in imgs_src]
+        
         cache[meta_data.pt_id] = (imgs_src, clds_src, masks_src, poses_src)
     else:
         imgs_src, clds_src, masks_src, poses_src = cache[meta_data.pt_id]
@@ -63,7 +66,8 @@ def load(meta_data: util.MetaData, match_data: util.MatchData):
     mask_dst = mask_dst[r1 : r2 + 1, c1 : c2 + 1]
     cld_dst = cld_dst[r1 : r2 + 1, c1 : c2 + 1]
 
-    img_dst = cv2.GaussianBlur(img_dst, (5, 5), 0)
+    if blur:
+        img_dst = cv2.GaussianBlur(img_dst, (5, 5), 0)
 
     # util.vis_cld(cld_dst, img_dst)
     """ store data to match_data """
@@ -103,16 +107,15 @@ def solve(match_data, icp_refine=False):
     mat_v2m = util.pose2mat(poses_src[idx])
     mat_m2c = mat_v2c @ np.linalg.inv(mat_v2m)
 
-    """ create point cloud """
-    pcd_src, pcd_dst = o3d.geometry.PointCloud(), o3d.geometry.PointCloud()
-    for i in range(len(clds_src)):
-        pts = util.transform(clds_src[i][masks_src[i] != 0], poses_src[i])
-        pcd_src.points.extend(o3d.utility.Vector3dVector(pts.reshape(-1, 3)))
-    pcd_dst.points = o3d.utility.Vector3dVector(cld_dst[mask_dst != 0].reshape(-1, 3))
-
-    """ refine with icp """
     if icp_refine:
+        """ create point cloud """
+        pcd_src, pcd_dst = o3d.geometry.PointCloud(), o3d.geometry.PointCloud()
+        for i in range(len(clds_src)):
+            pts = util.transform(clds_src[i][masks_src[i] != 0], poses_src[i])
+            pcd_src.points.extend(o3d.utility.Vector3dVector(pts.reshape(-1, 3)))
         pcd_src = pcd_src.voxel_down_sample(voxel_size=0.002)
+        pcd_dst.points = o3d.utility.Vector3dVector(cld_dst[mask_dst != 0].reshape(-1, 3))
+        """ refine with icp """
         rlt = o3d.pipelines.registration.registration_icp(pcd_src, pcd_dst, 0.01, mat_m2c)
         mat_m2c = rlt.transformation
 
@@ -163,15 +166,15 @@ def run_hope():
     meta_data = util.MetaData(proj_path=os.path.dirname(os.path.abspath(__file__)), dataset="hope")
     match_data = util.MatchData()
 
-    # meta_data.init(scene_id=1, img_id=0, pt_id=2, mask_id=2)
-    # load(meta_data, match_data)
-    # t0 = time.time()
-    # gmatch.Match(match_data, debug=-1)
-    # print(f"match time: {time.time() - t0:.3f}")
-    # print(f"best loss: {match_data.cost_list[match_data.idx_best]:.3f}")
-    # print(f"obj: {meta_data.pt_id}, len: {len(match_data.matches_list[match_data.idx_best])}")
-    # solve(match_data)
-    # exit()
+    meta_data.init(scene_id=1, img_id=0, pt_id=16, mask_id=0)
+    load(meta_data, match_data)
+    t0 = time.time()
+    gmatch.Match(match_data, debug=-1)
+    print(f"match time: {time.time() - t0:.3f}")
+    print(f"best loss: {match_data.cost_list[match_data.idx_best]:.3f}")
+    print(f"obj: {meta_data.pt_id}, len: {len(match_data.matches_list[match_data.idx_best])}")
+    solve(match_data)
+    exit()
 
     """ bop19 test set """
     with open("targets_manual_label.json", "r") as f:
