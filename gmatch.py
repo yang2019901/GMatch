@@ -1,27 +1,37 @@
-"""Use ORB/SIFT detector to match features between two images"""
+"""Implements GMatch to match keypoints extracted by ORB/SIFT detector."""
 
 import numpy as np
 import open3d as o3d
 import cv2
-import logging, time
+import time, logging
+import matplotlib.pyplot as plt
+import sys, os
+
+sys.path.append(os.path.dirname(__file__))
 
 import util
 
 
+logger = logging.getLogger(__file__)
+logger.setLevel(logging.WARN)
+h = logging.StreamHandler(sys.stdout)
+h.setFormatter(logging.Formatter("[%(levelname)s - %(funcName)s] %(message)s"))
+logger.addHandler(h)
+logger.propagate = False
+
+
 HAM_TAB = np.array(
     [bin(i).count("1") for i in range(256)], dtype=np.uint8
-)  # used to compute hamming distance, only ORB uses it now
+)  # for computing hamming distance, only ORB uses it now
 CACHE = {}  # cache for keypoints and features of imgs_src
-logging.basicConfig(level=logging.WARN, force=True)
+
 
 """ SIFT settings """
 detector: cv2.SIFT = cv2.SIFT_create()
-detector.setContrastThreshold(0.03)
+# detector.setContrastThreshold(0.03)
 N_good = 32  # number of good matches candidates
 D = 24  # max search depth
-thresh_feat = 0.1  # threshold for feature distance, used to judge the similarity of two feature vectors
-thresh_cost = 0.08  # if the maximum cost of adding `m` to matches is less than this, accept `m`
-thresh_flip = 0.8  # threshold for flipover judgement
+thresh_feat = 0.65  # threshold for feature distance, used to judge the similarity of two feature vectors
 feat_mat = lambda feat1, feat2: sift_mat(feat1, feat2)  # feature distance matrix
 
 
@@ -30,18 +40,24 @@ feat_mat = lambda feat1, feat2: sift_mat(feat1, feat2)  # feature distance matri
 # N_good = 30  # number of good matches
 # D = 24  # max search depth
 # thresh_feat = 90  # threshold for feature distance, used to judge the similarity of two feature vectors
-# thresh_cost = 0.08  # if the maximum cost of adding `m` to matches is less than this, accept `m`
-# thresh_flip = 0.8  # threshold for flipover judgement
 # feat_mat = lambda feat1, feat2: orb_mat(feat1, feat2)  # feature distance matrix
 
 
+""" GMatch settings """
+## threshold for geometric cost, applied to 3d distance error ratio when attempting to add `m` to matches.
+thresh_geom_ratio = 0.1
+## threshold for geometric cost, applied to 3d distance directly when attempting to add `m` to matches. (unit: meter)
+thresh_geom_abs = 0.005
+## threshold for flipover judgement
+thresh_flip = 0.8
+
+
 def orb_mat(feat1, feat2):
-    """compute feature distance matrix `Mf` for ORB, whose metric is Hamming distance.
+    """Compute feature distance matrix `Mf` for ORB, whose metric is Hamming distance.
     > Mh[i, j] == HamDist(feat1[i], feat2[j])
 
-    - Input:
-        feat1: (n1, 32), uint8
-        feat2: (n2, 32), uint8
+    - feat1: (n1, 32), uint8
+    - feat2: (n2, 32), uint8
     """
     global HAM_TAB
     ## broadcast feat1 and feat2
@@ -57,22 +73,24 @@ def orb_mat(feat1, feat2):
 
 
 def sift_mat(feat1, feat2):
-    """compute feature distance matrix `Mf` for SIFT, whose metric is Euclidean distance.
+    """Compute feature distance matrix `Mf` for SIFT, whose metric is Euclidean distance.
 
     Note: feat1 and feat2 will be L1-normalized
 
-    - Input:
-        feat1: (n1, 128), integer stored in float32
-        feat2: (n2, 128), integer stored in float32
+    - feat1: (n1, 128), integer stored in float32
+    - feat2: (n2, 128), integer stored in float32
     """
     feat1_ = feat1 / np.sum(feat1, axis=-1, keepdims=True)
     feat2_ = feat2 / np.sum(feat2, axis=-1, keepdims=True)
+    feat1_ = np.sqrt(feat1_)
+    feat2_ = np.sqrt(feat2_)
     Mf = np.linalg.norm(feat1_[:, np.newaxis, :] - feat2_[np.newaxis, :, :], axis=-1)
     return Mf
 
 
 def cost(matches, pairs, Me11, Me22):
-    """cost function for distance matrix.
+    """Cost function to differ two distance matrices.
+
     matches: (d, 2), pairs: (n, 2), Me11: (n1, n1), Me22: (n2, n2)
     """
     if len(matches) == 0:
@@ -81,7 +99,10 @@ def cost(matches, pairs, Me11, Me22):
     i, j = zip(*matches)  # (d, )
     dist1 = Me11[m0[:, np.newaxis], i]
     dist2 = Me22[m1[:, np.newaxis], j]
-    err = np.divide(np.abs(dist1 - dist2), dist1, out=np.ones_like(dist1), where=dist1 != 0)  # (n, d), error rate
+    ## Note: for err to be smaller than thresh_geom_ratio, np.abs(dist1 - dist2) must be smaller than thresh_geom_abs
+    err = (1e-5 + np.abs(dist1 - dist2)) / (
+        np.minimum(dist1, thresh_geom_abs / thresh_geom_ratio) + 1e-5
+    )  # (n, d), error rate
     return np.max(err, axis=-1)  # (n, )
 
 
@@ -96,7 +117,7 @@ def volume_equal(matches, pairs, pts1, pts2):
     v2 = pts2[pairs[:, 1]] - pts2[m[0][1]]  # (n, 3)
     V1 = np.sum(S1 * v1, axis=-1)  # (n, )
     V2 = np.sum(S2 * v2, axis=-1)  # (n, )
-    flags = np.abs(V1 - V2) < 1e-5
+    flags = np.abs(V1 - V2) < 1e-5  # unit: m^3
     return flags
 
 
@@ -133,13 +154,13 @@ def gmatch_search(pts1, pts2, Mf12):
     # pairs_good = np.argwhere(Mf12 < 0.1)
 
     pairs_simi = np.argwhere(Mf12 < thresh_feat)
-    logging.info(f"Found {len(pairs_simi)} similar pairs.")
+    logger.info(f"Found {len(pairs_simi)} similar pairs.")
     if len(pairs_simi) == 0:
         return np.array([]), 1
 
     for i, j in pairs_good:
         pairs = pairs_simi
-        costs = np.zeros(len(pairs)) # each pair v.s. matches[:-1]
+        costs = np.zeros(len(pairs))  # each pair v.s. matches[:-1]
         matches = [(i, j)]
         c = 0
         ## step(), search for the next match
@@ -151,7 +172,7 @@ def gmatch_search(pts1, pts2, Mf12):
             costs = np.maximum(costs, cost([matches[-1]], pairs, Me11, Me22))  # (n, )
 
             ## filter with geometric cost
-            ind = np.argwhere(costs < thresh_cost).flatten()
+            ind = np.argwhere(costs < thresh_geom_ratio).flatten()
             pairs = pairs[ind]
             costs = costs[ind]
 
@@ -185,14 +206,14 @@ def ransac_search(pts1, pts2, Mf12):
     import ransac
 
     pairs_simi = np.argwhere(Mf12 < thresh_feat)
-    logging.info(f"Found {len(pairs_simi)} similar pairs.")
+    logger.info(f"Found {len(pairs_simi)} similar pairs.")
 
     if len(pairs_simi) == 0:
         return (np.array([]), 1)
 
     result = ransac.registration_ransac_based_on_correspondence(pts1, pts2, pairs_simi, 0.008, max_iteration=1000)
     if result is None or result.correspondence_set is None:
-        logging.warning("RANSAC failed to find enough correspondences.")
+        logger.warning("RANSAC failed to find enough correspondences.")
         return (np.array([]), 1)
 
     return np.array(result.correspondence_set), result.inlier_rmse
@@ -202,7 +223,7 @@ def teaserpp_search(pts1, pts2, Mf12):
     import teaserpp_python
 
     pairs_simi = np.argwhere(Mf12 < thresh_feat)
-    logging.info(f"Found {len(pairs_simi)} similar pairs.")
+    logger.info(f"Found {len(pairs_simi)} similar pairs.")
 
     if len(pairs_simi) == 0:
         return (np.array([]), 1)
