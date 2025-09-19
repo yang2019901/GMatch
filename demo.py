@@ -64,7 +64,7 @@ match_data = util.MatchData(
 )
 
 ## GMatch matching under SIFT description
-gmatch.Match(match_data, cache_id="sugar_box")
+gmatch.Match(match_data, debug=1)
 
 ## get the best matches and convert them to matched 3d points
 i = match_data.idx_best
@@ -84,7 +84,7 @@ pts2_m = match_data.cld_dst[uv2_m[:, 1], uv2_m[:, 0]]
 util.Solve(match_data)
 
 ## ICP refinement (optional)
-util.Refine(match_data)
+# util.Refine(match_data)
 
 ## get SE(3) matrix from model to camera, aka the estimated pose of the object w.r.t. scene camera coordinate system.
 mat_m2c = match_data.mat_m2c

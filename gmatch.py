@@ -5,10 +5,18 @@ import cv2
 import time
 import matplotlib.pyplot as plt
 import sys, os
+import logging
 
 sys.path.append(os.path.dirname(__file__))
 
 import util
+
+logger = logging.getLogger(__file__)
+logger.setLevel(logging.INFO)
+h = logging.StreamHandler(sys.stdout)
+h.setFormatter(logging.Formatter("[%(levelname)5s] [%(funcName)s] %(message)s"))
+logger.addHandler(h)
+logger.propagate = False
 
 
 HAM_TAB = np.array(
@@ -36,19 +44,24 @@ feat_mat = lambda feat1, feat2: sift_mat(feat1, feat2)  # feature distance matri
 
 """ GMatch settings """
 ## threshold for geometric cost, applied to 3d distance error ratio when attempting to add `m` to matches.
-thresh_geom_ratio = 0.08  
+thresh_geom_ratio = 0.08
 ## threshold for geometric cost, applied to 3d distance directly when attempting to add `m` to matches. (unit: meter)
-thresh_geom_abs = 0.02  
+thresh_geom_abs = 0.02
 ## threshold for flipover judgement
 thresh_flip = 0.8
 
 
 def orb_mat(feat1, feat2):
     """Compute feature distance matrix `Mf` for ORB, whose metric is Hamming distance.
-    > Mh[i, j] == HamDist(feat1[i], feat2[j])
 
-    - feat1: (n1, 32), uint8
-    - feat2: (n2, 32), uint8
+    Note: Mf[i, j] = HamDist(feat1[i], feat2[j])
+
+    Args:
+        feat1: (n1, 32), uint8
+        feat2: (n2, 32), uint8
+
+    Returns:
+        Mf: (n1, n2), uint8
     """
     global HAM_TAB
     ## broadcast feat1 and feat2
@@ -66,10 +79,13 @@ def orb_mat(feat1, feat2):
 def sift_mat(feat1, feat2):
     """Compute feature distance matrix `Mf` for SIFT, whose metric is Euclidean distance.
 
-    Note: feat1 and feat2 will be L1-normalized
+    Note: RootSIFT is used here.
 
-    - feat1: (n1, 128), integer stored in float32
-    - feat2: (n2, 128), integer stored in float32
+    Args:
+        feat1: (n1, 128), integer stored in float32
+        feat2: (n2, 128), integer stored in float32
+    Returns:
+        Mf: (n1, n2), float32
     """
     feat1_ = feat1 / np.sum(feat1, axis=-1, keepdims=True)
     feat2_ = feat2 / np.sum(feat2, axis=-1, keepdims=True)
@@ -80,7 +96,17 @@ def sift_mat(feat1, feat2):
 def cost(matches, pairs, Me11, Me22):
     """Cost function to differ two distance matrices.
 
-    matches: (d, 2), pairs: (n, 2), Me11: (n1, n1), Me22: (n2, n2)
+    Trying to add each of `pairs` to `matches`, compute the cost for each of them.
+    Cost is defined as the max relative distance error ratio among all pairs in `matches` after adding the new pair.
+
+    Args:
+        matches: (d, 2), int32
+        pairs: (n, 2), int32
+        Me11: (n1, n1), float32, euclidean distance matrix of pts1
+        Me22: (n2, n2), float32, euclidean distance matrix of pts2
+
+    Returns:
+        err: (n, ), cost for each of `pairs`
     """
     if len(matches) == 0:
         return 0
@@ -96,7 +122,16 @@ def cost(matches, pairs, Me11, Me22):
 
 
 def volume_equal(matches, pairs, pts1, pts2):
-    """pairs: (n, 2), return (n, ) boolean array"""
+    """Volume equality judgement.
+
+    Args:
+        matches: (d, 2), int32
+        pairs: (n, 2), int32
+        pts1: (n1, 3), float32
+        pts2: (n2, 3), float32
+
+    Returns:
+        flags: (n, ), bool"""
     if len(matches) < 3:
         return np.ones(len(pairs), dtype=bool)
     m = matches  # alias
@@ -113,7 +148,14 @@ def volume_equal(matches, pairs, pts1, pts2):
 def flipover(matches, pairs, pts1, pts2):
     """Flipover judgement.
 
-    pairs: (n, 2), return (n, ) boolean array"""
+    Args:
+        matches: (d, 2), int32
+        pairs: (n, 2), int32
+        pts1: (n1, 3), float32
+        pts2: (n2, 3), float32
+
+    Returns:
+        (n, ) boolean array"""
     global thresh_flip
     if len(matches) < 2:
         return np.zeros(len(pairs), dtype=bool)
@@ -141,7 +183,16 @@ def flipover(matches, pairs, pts1, pts2):
 
 
 def search(pts1, pts2, Mf12):
-    """Search with geometric constraints (distance matrix and flipover judgement)."""
+    """Incremental search with geometric constraints
+    
+    Args:
+        pts1: (n1, 3), float32
+        pts2: (n2, 3), float32
+        Mf12: (n1, n2), feature distance matrix; float32 for SIFT, uint8 for ORB
+
+    Returns:
+        (matches, cost): matches is (d, 2), int32; cost is float32 in [0, 1] where 1 means no matches found.
+    """
     n1, n2 = Mf12.shape
     matches = []
     rlt = []
@@ -166,7 +217,7 @@ def search(pts1, pts2, Mf12):
             if len(matches) == D:
                 break
             ## filter with geometric cost
-            # print(f"len(matches): {len(matches)}, len(pairs): {len(pairs)}")
+            logger.debug(f"len(matches): {len(matches)}, len(pairs): {len(pairs)}")
             costs = cost(matches, pairs, Me11, Me22)  # (n, )
             ind = np.argwhere(costs < thresh_geom_ratio).flatten()
             pairs = pairs[ind]
@@ -195,30 +246,38 @@ def search(pts1, pts2, Mf12):
 
 
 def Match(match_data: util.MatchData, cache_id=None, debug=-1):
-    """Match each of imgs_src with img_dst in match_data and store the result in it;
-    keypoints and features for imgs_src will be cached with cache_id if provided.
-    debug: -1, 0, 1, 2, bigger value means more debug info and -1 means none
+    """Match keypoints and features between destination and each source images.
 
-    - imgs_src, clds_src: (N, H, W, 3)
-    - img_dst, cld_dst: (H, W, 3)
+    Extract data from `match_data`, then match each of source images and destination image in match_data and store the result in it;
+    
+    Args:
+        match_data: util.MatchData, see util.py for details.
+        cache_id: any immutable, optional. if provided, the keypoints and features for the source image will be cached with `cache_id`.
+        debug: -1, 0, 1, 2, bigger value means more debug info and -1 means none
+    
+    Returns:
+        None, the result is stored in `match_data`.
     """
     global detector, CACHE
     assert len(match_data.imgs_src) > 0, "imgs_src is empty"
-    """ load from match_data """
+
+    # imgs_src: (N, H, W, 3); clds_src: (N, H, W, 3); masks_src: (N, H, W); can be list
     imgs_src, clds_src, masks_src = (
         match_data.imgs_src,
         match_data.clds_src,
         match_data.masks_src,
     )
+    # img_dst: (H, W, 3); cld_dst: (H, W, 3); mask_dst: (H, W)
     img_dst, cld_dst, mask_dst = (
         match_data.img_dst,
         match_data.cld_dst,
         match_data.mask_dst,
     )
 
+    # extract the keypoints and features with descriptor
     kp_dst, feat_dst = detector.detectAndCompute(img_dst, mask_dst)
     if len(kp_dst) == 0:
-        print("No keypoints found in img2")
+        logger.error("No keypoints found in img_dst (aka, scene image).")
         match_data.matches_list = [[]]
         match_data.cost_list = [1]
         match_data.uvs_src = []
@@ -228,7 +287,6 @@ def Match(match_data: util.MatchData, cache_id=None, debug=-1):
     uv_dst = np.array([k.pt for k in kp_dst], dtype=np.int32)
     pts_dst = cld_dst[uv_dst[:, 1], uv_dst[:, 0]]
 
-    """ extract the keypoints and features with descriptor """
     matches_list = []
     uvs_src = []
     for i, (img_src, cld_src, mask_src) in enumerate(zip(imgs_src, clds_src, masks_src)):
@@ -246,37 +304,33 @@ def Match(match_data: util.MatchData, cache_id=None, debug=-1):
         pts_src = cld_src[uv_src[:, 1], uv_src[:, 0]]
         uvs_src.append(uv_src)
 
-        """ Feature Distance Matrix (for visual similarity) """
+        # Feature Distance Matrix (for visual similarity)
         Mf12 = feat_mat(feat_src, feat_dst)
 
-        """ <Tune>
-            N1 and N2: plot to see whether keypoints are enough
-            thresh_feat: find a suitable threshold for feature distance
-        """
-        if debug >= 1:
+        if debug >= 2:
             util.plot_keypoints(img_src, img_dst, uv_src, uv_dst, Mf12, thresh_feat)
 
         matches, cost = search(pts_src, pts_dst, Mf12)
         matches_list.append((matches, cost))
 
-        """ visualization """
-        if debug >= 2:
+        # visualization
+        if debug >= 1:
             if len(matches) < 3:
-                print(f"\timgs_src[{i}]: matches NOT found.")
+                logger.info(f"\timgs_src[{i}]: matches NOT found.")
             else:
-                print(f"\timgs_src[{i}]: matches found. depth {len(matches)}, cost {cost:.3f}")
+                logger.info(f"\timgs_src[{i}]: matches found. depth {len(matches)}, cost {cost:.3f}")
                 util.plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
 
         if len(matches) == D:
             break
 
-    """ take max depth matches as the best """
+    # take max depth matches as the best
     match_data.matches_list, match_data.cost_list = zip(*matches_list)
     match_data.uvs_src = uvs_src
     match_data.uv_dst = uv_dst
     match_data.idx_best = np.argmax([len(matches) for matches, _ in matches_list])
 
-    """ visualization """
+    # visualization
     if debug >= 0:
         if len(match_data.matches_list[match_data.idx_best]) > 0:
             img_src = imgs_src[match_data.idx_best]

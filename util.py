@@ -6,18 +6,26 @@ import numpy as np
 import open3d as o3d
 import pickle
 import os.path
+import sys, logging
 from dataclasses import dataclass
 
 import matplotlib.pyplot as plt
 from matplotlib import patches, collections
 from scipy.spatial.transform import Rotation
 
+logger = logging.getLogger(__file__)
+logger.setLevel(logging.WARN)
+h = logging.StreamHandler(sys.stdout)
+h.setFormatter(logging.Formatter('[%(levelname)5s] [%(funcName)s] %(message)s'))
+logger.addHandler(h)
+logger.propagate = False
+
 
 @dataclass
 class MatchData:
     """Data structure for matching keypoints and estimating pose."""
 
-    ## input data for GMatch
+    # input data for GMatch
     imgs_src: list
     clds_src: list
     masks_src: list
@@ -26,7 +34,7 @@ class MatchData:
     cld_dst: np.ndarray
     mask_dst: np.ndarray
 
-    ## GMatch result
+    # GMatch result
     matches_list = None  # list of matches, see gmatch.Match
     cost_list = None  # list of distance matrix cost, ranging 0-1, see gmatch.Match
     uvs_src = None  # keypoints extracted from each source image
@@ -41,17 +49,17 @@ def Solve(match_data: MatchData):
     ii = match_data.idx_best
     matches = match_data.matches_list[ii]
 
-    ## to solve pose from 3d-3d correspondence, we need at least 3 matches
+    # to solve pose from 3d-3d correspondence, we need at least 3 matches
     if len(matches) < 3:
-        print("Warning: Pose estimation failed, not enough matches")
+        logger.warning("Pose estimation failed, not enough matches")
         match_data.mat_m2c = np.eye(4)
         return
 
-    ## alias for src and dst data
+    # alias for src and dst data
     clds_src, masks_src, poses_src = match_data.clds_src, match_data.masks_src, match_data.poses_src
     img_dst, cld_dst, mask_dst = match_data.img_dst, match_data.cld_dst, match_data.mask_dst
 
-    ## get 3d keypoints from correspondence
+    # get 3d keypoints from correspondence
     uv1_m = match_data.uvs_src[ii][matches[:, 0]]
     uv2_m = match_data.uv_dst[matches[:, 1]]
     pts1_m = clds_src[ii][uv1_m[:, 1], uv1_m[:, 0], :]
@@ -61,48 +69,50 @@ def Solve(match_data: MatchData):
     pcd2.points = o3d.utility.Vector3dVector(pts2_m)
     corres = o3d.utility.Vector2iVector([[i, i] for i in range(len(uv1_m))])
 
-    ## solve correspondence with Kabsch algorithm
+    # solve correspondence with Kabsch algorithm
     estim = o3d.pipelines.registration.TransformationEstimationPointToPoint()
     mat_v2c = estim.compute_transformation(pcd1, pcd2, corres)
 
-    ## get SE(3) matrix from view to model.
+    # get SE(3) matrix from view to model.
     mat_v2m = pose2mat(poses_src[ii])
 
-    ## get SE(3) matrix from model to camera, aka the estimated pose of the object w.r.t. scene camera coordinate system.
+    # get SE(3) matrix from model to camera, aka the estimated pose of the object w.r.t. scene camera coordinate system.
     match_data.mat_m2c = mat_v2c @ np.linalg.inv(mat_v2m)
 
 
 def Refine(match_data: MatchData, voxel_size=0.01):
-    """Refine the pose estimation with ICP. match_data.mat_m2c is used as the initial pose and will be written in place.
+    """Refine the pose estimation with ICP.
 
-    - voxel_size: the voxel size for downsampling point cloud. unit: meter. Smaller value makes the refinement more accurate but slower.
+    Note: `match_data.mat_m2c` is used as the initial pose and will be written in place.
 
-    Note: Tune `voxel_size` for your model and data. unit: meter.
+    Args:
+        match_data: util.MatchData, see util.py for details.
+        voxel_size: float, the voxel size for downsampling point cloud. unit: meter. Smaller value makes the refinement more accurate but slower.
     """
 
-    ## alias for src and dst data
+    # alias for src and dst data
     clds_src, cld_dst = match_data.clds_src, match_data.cld_dst
     imgs_src, img_dst = match_data.imgs_src, match_data.img_dst
     masks_src, mask_dst = match_data.masks_src, match_data.mask_dst
     poses_src = match_data.poses_src
     mat_m2c = match_data.mat_m2c
 
-    ## create point cloud
+    # create point cloud
     pcd_src, pcd_dst = o3d.geometry.PointCloud(), o3d.geometry.PointCloud()
     for i in range(len(clds_src)):
         pts = transform(clds_src[i][masks_src[i] != 0], poses_src[i])
         pcd_src.points.extend(o3d.utility.Vector3dVector(pts.reshape(-1, 3)))
     pcd_dst.points = o3d.utility.Vector3dVector(cld_dst[mask_dst != 0].reshape(-1, 3))
 
-    ## downsample point cloud and compute normals
+    # downsample point cloud and compute normals
     pcd_src_down = pcd_src.voxel_down_sample(voxel_size)
     pcd_dst_down = pcd_dst.voxel_down_sample(voxel_size)
 
-    ## refine with colored icp
+    # refine with colored icp
     rlt = o3d.pipelines.registration.registration_icp(pcd_src_down, pcd_dst_down, 5 * voxel_size, mat_m2c)
     mat_m2c = rlt.transformation
 
-    ## write result in place
+    # write result in place
     match_data.mat_m2c = mat_m2c
 
 
@@ -153,8 +163,12 @@ def vis_cld(clds, colors=None, poses=None):
 def get_snapshots(mesh):
     """Render the mesh from six views and return snapshots.
 
-    - mesh: o3d.geometry.TriangleMesh
-    - snapshots: [(rgb, cld, mask, M_ex), ...]
+    Args:
+        mesh: o3d.geometry.TriangleMesh
+
+    Returns:
+        snapshots: [(rgb, cld, mask, M_ex), ...]
+
     - rgb: (H, W, 3), 0~1
     - cld: (H, W, 3), meters
     - mask: (H, W), bool
@@ -164,7 +178,7 @@ def get_snapshots(mesh):
     vis.create_window(visible=False, width=640, height=480)
     vis.add_geometry(mesh)
 
-    ## 6-axis sampling
+    # 6-axis sampling
     camera_params = [
         {"front": [1, 0, 0], "lookat": [0, 0, 0], "up": [0, 0, 1]},  # x+
         {"front": [-1, 0, 0], "lookat": [0, 0, 0], "up": [0, 0, 1]},  # x-
@@ -209,8 +223,12 @@ def get_snapshots(mesh):
     return snapshots
 
 
-def save_snapshots(snapshots, path):
+def save_snapshots(snapshots, path) -> None:
     """Save snapshots to a file.
+
+    Args:
+        snapshots: [(rgb, cld, mask, M_ex), ...]
+        path: str, the file path to save the snapshots.
 
     - imgs: (N, H, W, 3), 0~255, uint8
     - clds: (N, H, W, 3), meters, float32
@@ -227,10 +245,12 @@ def save_snapshots(snapshots, path):
         pickle.dump((imgs, clds, masks, poses), f)
 
 
-def vis_snapshots(snapshots):
+def vis_snapshots(snapshots) -> None:
     """Visualize snapshots.
 
-    - snapshots: [(rgb, cld, mask, M_ex), ...]
+    Args:
+        snapshots: [(rgb, cld, mask, M_ex), ...]
+
     - rgb: (H, W, 3), 0~1 or 0~255
     - cld: (H, W, 3), meters
     - mask: (H, W), all non-zero pixel will be displayed
@@ -281,9 +301,18 @@ def plot_matches(img1, img2, uv1, uv2):
     return
 
 
-def plot_keypoints(img1, img2, uv1, uv2, Mf12, thresh_feat):
+def plot_keypoints(img1, img2, uv1, uv2, Mf12, thresh_feat) -> None:
     """Plot keypoints between two images, and mark locally matched points interactively.
+
     Useful for try out the appropriate thresh_feat for Mf12.
+
+    Args:
+        img1: (H, W, 3), source image
+        img2: (H, W, 3), destination image
+        uv1: (n1, 2), keypoints in img1
+        uv2: (n2, 2), keypoints in img2
+        Mf12: (n1, n2), feature distance matrix between uv1 and uv2
+        thresh_feat: float, threshold for feature distance to determine locally matched keypoints
     """
     idx1 = -1  # index of selected keypoint in img1
     alts = []  # indices of locally matched keypoints in img2
@@ -309,8 +338,8 @@ def plot_keypoints(img1, img2, uv1, uv2, Mf12, thresh_feat):
             return
         x, y = int(event.xdata), int(event.ydata)
         distances = np.linalg.norm(uv1 - np.array([x, y]), axis=1)
-        ## Note: due to np.int in Match, there may be multiple idx2
-        ## so we take the last one, which is drawed last s.t. we can see the color
+        # Note: due to np.int in Match, there may be multiple idx2
+        # so we take the last one, which is drawed last s.t. we can see the color
         idx1 = np.argwhere(distances == distances.min())[-1].item()
         ax1.set_title(f"keypoints: {len(uv1)}, selected: {idx1}")
         dists = Mf12[idx1]
@@ -324,11 +353,11 @@ def plot_keypoints(img1, img2, uv1, uv2, Mf12, thresh_feat):
         nonlocal idx1, idx2, alts
         if event.inaxes != ax2:
             return
-        ## set idx2
+        # set idx2
         x, y = int(event.xdata), int(event.ydata)
         distances = np.linalg.norm(uv2 - np.array([x, y]), axis=1)
-        ## Note: due to np.int in Match, there may be multiple idx2
-        ## so we take the last one, which is drawed last s.t. we can see the color
+        # Note: due to np.int in Match, there may be multiple idx2
+        # so we take the last one, which is drawed last s.t. we can see the color
         idx2 = np.argwhere(distances == distances.min())[-1].item()
         ax2.set_title(f"keypoints: {len(uv2)}, selected: {idx2}")
         if idx1 != -1:
