@@ -61,11 +61,11 @@ class MatchData:
         self.cld_dst = None
         self.mask_dst = None
         """ match result """
-        self.matches_list = []  # list of matches, see gmatch.match_features
-        self.cost_list = []  # list of cost, ranging 0-1, see gmatch.match_features
-        self.uvs_src = []  # keypoints extracted from each source image
-        self.uv_dst = None  # keypoints extracted from the destination image
-        self.idx_best = None  # index of the best matches (longest)
+        self.pt_src = None  # (n1, 3), float32
+        self.pt_dst = None  # (n2, 3), float32
+        self.matches = None  # best correspondences, (N, 2)
+        self.cost = None
+        """ pose estimation result """
         self.mat_m2c = None  # model to camera transformation matrix, 4x4
 
 
@@ -425,7 +425,7 @@ def vis_snapshots(snapshots):
     o3d.visualization.draw_geometries(clds)
 
 
-def plot_matches(img1, img2, uv1, uv2):
+def plot_matches(img1, img2, uv1, uv2, show_immidiate=True):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
     ax1.imshow(img1)
     ax2.imshow(img2)
@@ -438,13 +438,14 @@ def plot_matches(img1, img2, uv1, uv2):
             xyA=pt1, xyB=pt2, axesA=ax1, axesB=ax2, coordsA="data", coordsB="data", color="green"
         )
         fig.add_artist(l)
-    fig.suptitle(f"matches: {len(uv1)}")
+    fig.suptitle(f"len(matches): {len(uv1)}")
     fig.tight_layout()
-    plt.show()
+    if show_immidiate:
+        plt.show()
     return
 
 
-def plot_keypoints(img1, img2, uv1, uv2, Mf12, thresh_feat):
+def plot_keypoints(img1, img2, uv1, uv2, Mf12, thresh_feat, show_immidiate=True):
     idx1 = -1
     alts = []
     idx2 = -1
@@ -511,4 +512,5 @@ def plot_keypoints(img1, img2, uv1, uv2, Mf12, thresh_feat):
     fig.tight_layout()
     fig.canvas.mpl_connect("button_press_event", on_click_src)
     fig.canvas.mpl_connect("button_press_event", on_click_dst)
-    plt.show()
+    if show_immidiate:
+        plt.show()

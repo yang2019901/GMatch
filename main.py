@@ -15,7 +15,7 @@ cache = {}
 logger = logging.getLogger(__file__)
 logger.setLevel(logging.INFO)
 h = logging.StreamHandler(sys.stdout)
-h.setFormatter(logging.Formatter('[%(levelname)s - %(funcName)s] %(message)s'))
+h.setFormatter(logging.Formatter("[%(levelname)5s] [%(funcName)s] %(message)s"))
 logger.addHandler(h)
 logger.propagate = False
 
@@ -92,8 +92,11 @@ def load(meta_data: util.MetaData, match_data: util.MatchData):
 
 def solve(match_data: util.MatchData, icp_refine=False):
     """solve correspondence with the best match in match_data"""
-    idx = match_data.idx_best
-    matches = match_data.matches_list[idx]
+
+    matches = match_data.matches
+    pt_src = match_data.pt_src
+    pt_dst = match_data.pt_dst
+
     clds_src, masks_src, poses_src = match_data.clds_src, match_data.masks_src, match_data.poses_src
     cld_dst, mask_dst = match_data.cld_dst, match_data.mask_dst
 
@@ -103,8 +106,8 @@ def solve(match_data: util.MatchData, icp_refine=False):
         voxel_sz = 0.005
         pcd_src, pcd_dst = o3d.geometry.PointCloud(), o3d.geometry.PointCloud()
         for i in range(len(clds_src)):
-            pts = util.transform(clds_src[i][masks_src[i] != 0], poses_src[i])
-            pcd_src.points.extend(o3d.utility.Vector3dVector(pts.reshape(-1, 3)))
+            pt = util.transform(clds_src[i][masks_src[i] != 0], poses_src[i])
+            pcd_src.points.extend(o3d.utility.Vector3dVector(pt.reshape(-1, 3)))
         pcd_src = pcd_src.voxel_down_sample(voxel_size=voxel_sz)
         pcd_dst.points = o3d.utility.Vector3dVector(cld_dst[mask_dst != 0].reshape(-1, 3))
         pcd_dst = pcd_dst.voxel_down_sample(voxel_size=voxel_sz)
@@ -126,34 +129,28 @@ def solve(match_data: util.MatchData, icp_refine=False):
         match_data.mat_m2c = result.transformation
         return
 
-    uv_src = match_data.uvs_src[idx][matches[:, 0]]
-    uv_dst = match_data.uv_dst[matches[:, 1]]
-
-    """ solve correspondence """
+    # solve correspondence
     pcd1, pcd2 = o3d.geometry.PointCloud(), o3d.geometry.PointCloud()
-    pcd1.points = o3d.utility.Vector3dVector(clds_src[idx, uv_src[:, 1], uv_src[:, 0], :])
-    pcd2.points = o3d.utility.Vector3dVector(cld_dst[uv_dst[:, 1], uv_dst[:, 0], :])
-    corres = o3d.utility.Vector2iVector([[i, i] for i in range(len(uv_src))])
-    """ Kabsch """
+    pcd1.points = o3d.utility.Vector3dVector(pt_src[matches[:, 0], :])
+    pcd2.points = o3d.utility.Vector3dVector(pt_dst[matches[:, 1], :])
+    corres = o3d.utility.Vector2iVector([[i, i] for i in range(len(matches))])
+    # Kabsch
     estim = o3d.pipelines.registration.TransformationEstimationPointToPoint()
-    mat_v2c = estim.compute_transformation(pcd1, pcd2, corres)
-
-    mat_v2m = util.pose2mat(poses_src[idx])
-    mat_m2c = mat_v2c @ np.linalg.inv(mat_v2m)
+    mat_m2c = estim.compute_transformation(pcd1, pcd2, corres)
 
     if icp_refine:
-        """create point cloud"""
+        # create point cloud
         pcd_src, pcd_dst = o3d.geometry.PointCloud(), o3d.geometry.PointCloud()
         for i in range(len(clds_src)):
-            pts = util.transform(clds_src[i][masks_src[i] != 0], poses_src[i])
-            pcd_src.points.extend(o3d.utility.Vector3dVector(pts.reshape(-1, 3)))
+            pt = util.transform(clds_src[i][masks_src[i] != 0], poses_src[i])
+            pcd_src.points.extend(o3d.utility.Vector3dVector(pt.reshape(-1, 3)))
         pcd_src = pcd_src.voxel_down_sample(voxel_size=0.002)
         pcd_dst.points = o3d.utility.Vector3dVector(cld_dst[mask_dst != 0].reshape(-1, 3))
-        """ refine with icp """
+        # refine with icp
         rlt = o3d.pipelines.registration.registration_icp(pcd_src, pcd_dst, 0.01, mat_m2c)
         mat_m2c = rlt.transformation
 
-    """ store result """
+    # store result
     logger.debug(f"model in camera, pos: \n{mat_m2c}")
     match_data.mat_m2c = mat_m2c
 
@@ -161,7 +158,7 @@ def solve(match_data: util.MatchData, icp_refine=False):
 def result2record(meta_data: util.MetaData, match_data: util.MatchData):
     """record is formatted as bop19 result except that timespan is missing"""
     scene_id, im_id, obj_id = meta_data.scene_id, meta_data.img_id, meta_data.pt_id
-    score = len(match_data.matches_list[match_data.idx_best])
+    score = len(match_data.matches)
     ## Note: convert `t` to mm, leave `R` as it is for it has no unit
     R, t = match_data.mat_m2c[:3, :3], match_data.mat_m2c[:3, 3] * 1000
     R = " ".join(map(lambda x: f"{x:.6f}", R.flatten().tolist()))
@@ -181,7 +178,7 @@ def process_img(meta_data: util.MetaData, match_data: util.MatchData, targets):
         meta_data.init(pt_id=obj_id, scene_id=scene_id, img_id=img_id, mask_id=mask_id)
         load(meta_data, match_data)
         gmatch.Match(match_data, meta_data.pt_id, debug=-1)
-        logger.debug(f"\tobj: {meta_data.pt_id}, len: {len(match_data.matches_list[match_data.idx_best])}")
+        logger.debug(f"\tobj: {meta_data.pt_id}, len: {len(match_data.matches)}")
         solve(match_data, icp_refine=True)
         record_list.append(result2record(meta_data, match_data))
     timespan = time.time() - t0
@@ -256,8 +253,6 @@ def run_ycbv_targets(dataset_name, scenes, debug, icp_refine):
             solve(match_data, icp_refine=icp_refine)
             dt = time.time() - t0
 
-            logger.info(f"img_id: {meta_data.img_id}, len: {len(match_data.matches_list[match_data.idx_best])}", end=", ")
-
             M_pred = match_data.mat_m2c
 
             M = np.eye(4)
@@ -269,14 +264,16 @@ def run_ycbv_targets(dataset_name, scenes, debug, icp_refine):
 
             dist_err = np.linalg.norm(M_err[:3, 3])
             ang_err = np.arccos((np.trace(M_err[:3, :3]) - 1) / 2)
-            logger.info(f"dist_err: {dist_err*1000:.1f} mm, ang_err: {np.rad2deg(ang_err):.1f} deg", f"dt: {dt*1000:.1f} ms")
+            logger.info(
+                f"img_id: {meta_data.img_id:>3}, len: {len(match_data.matches):>3}, dist_err: {dist_err*1000:>5.1f} mm, ang_err: {np.rad2deg(ang_err):>5.1f} deg, dt: {dt*1000:.0f} ms"
+            )
             result.append(f"{meta_data.img_id}, {dist_err*1000:.1f}, {np.rad2deg(ang_err):.1f}, {dt*1000:.1f}\n")
 
         # with open(f"result_ycbv_{scene_id}_{pt_id}.csv", "w") as f:
         #     f.writelines(result)
 
 
-def run_per_object(dataset_name, scene_id, img_id, obj_id, mask_id, debug=-1):
+def run_per_object(dataset_name, scene_id, img_id, obj_id, mask_id, debug):
     meta_data = util.MetaData(proj_path=os.path.dirname(os.path.abspath(__file__)), dataset=dataset_name)
     match_data = util.MatchData()
     meta_data.init(scene_id=scene_id, img_id=img_id, pt_id=obj_id, mask_id=mask_id)
@@ -284,13 +281,13 @@ def run_per_object(dataset_name, scene_id, img_id, obj_id, mask_id, debug=-1):
     t0 = time.time()
     gmatch.Match(match_data, debug=debug)
     logger.info(f"match time: {time.time() - t0:.3f}")
-    logger.info(f"best loss: {match_data.cost_list[match_data.idx_best]:.3f}")
-    logger.info(f"obj: {meta_data.pt_id}, len: {len(match_data.matches_list[match_data.idx_best])}")
+    logger.info(f"best loss: {match_data.cost}")
+    logger.info(f"obj: {meta_data.pt_id}, len: {len(match_data.matches)}")
     solve(match_data)
 
 
 if __name__ == "__main__":
-    run_per_object("ycbv", 54, 1, 2, 0)
-    run_ycbv_targets("ycbv", [(54, 2, 0)], debug=2, icp_refine=False)
+    run_per_object("ycbv", 54, 22, 2, 0, debug=-1)
+    # run_ycbv_targets("ycbv", [(54, 2, 0)], debug=1, icp_refine=False)
     # run_per_dataset("hope", "./targets_manual_label.json", "result_hope-test.csv")
     # run_per_dataset("ycbv", "./bop_data/ycbv/test_targets_bop19.json", "result_ycbv-test.csv")

@@ -13,9 +13,9 @@ import util
 
 
 logger = logging.getLogger(__file__)
-logger.setLevel(logging.WARN)
+logger.setLevel(logging.INFO)
 h = logging.StreamHandler(sys.stdout)
-h.setFormatter(logging.Formatter("[%(levelname)s - %(funcName)s] %(message)s"))
+h.setFormatter(logging.Formatter("[%(levelname)5s] [%(funcName)s] %(message)s"))
 logger.addHandler(h)
 logger.propagate = False
 
@@ -44,11 +44,11 @@ feat_mat = lambda feat1, feat2: sift_mat(feat1, feat2)  # feature distance matri
 
 
 """ GMatch settings """
-## threshold for geometric cost, applied to 3d distance error ratio when attempting to add `m` to matches.
+# threshold for geometric cost, applied to 3d distance error ratio when attempting to add `m` to matches.
 thresh_geom_ratio = 0.1
-## threshold for geometric cost, applied to 3d distance directly when attempting to add `m` to matches. (unit: meter)
+# threshold for geometric cost, applied to 3d distance directly when attempting to add `m` to matches. (unit: meter)
 thresh_geom_abs = 0.005
-## threshold for flipover judgement
+# threshold for flipover judgement
 thresh_flip = 0.8
 
 
@@ -60,14 +60,14 @@ def orb_mat(feat1, feat2):
     - feat2: (n2, 32), uint8
     """
     global HAM_TAB
-    ## broadcast feat1 and feat2
+    # broadcast feat1 and feat2
     feat1_ = feat1[:, np.newaxis, :]
     feat2_ = feat2[np.newaxis, :, :]
-    ## compute xor result
+    # compute xor result
     xor_result = feat1_ ^ feat2_
-    ## compute hamming distance
+    # compute hamming distance
     hamming_distances = HAM_TAB[xor_result]
-    ## sum along the last axis to get the hamming distance matrix
+    # sum along the last axis to get the hamming distance matrix
     Mf = np.sum(hamming_distances, axis=-1)
     return Mf
 
@@ -99,11 +99,10 @@ def cost(matches, pairs, Me11, Me22):
     i, j = zip(*matches)  # (d, )
     dist1 = Me11[m0[:, np.newaxis], i]
     dist2 = Me22[m1[:, np.newaxis], j]
-    ## Note: for err to be smaller than thresh_geom_ratio, np.abs(dist1 - dist2) must be smaller than thresh_geom_abs
-    err = (1e-5 + np.abs(dist1 - dist2)) / (
-        np.minimum(dist1, thresh_geom_abs / thresh_geom_ratio) + 1e-5
-    )  # (n, d), error rate
-    return np.max(err, axis=-1)  # (n, )
+    err = np.abs(dist1 - dist2)
+    ratio = (1e-5 + err) / (1e-5 + dist1)  # (n, d), error rate
+    c = np.where(np.max(err, axis=-1) <= thresh_geom_abs, np.max(ratio, axis=-1), 1)  # (n, d), penalize large errors
+    return c  # (n, )
 
 
 def volume_equal(matches, pairs, pts1, pts2):
@@ -163,15 +162,15 @@ def gmatch_search(pts1, pts2, Mf12):
         costs = np.zeros(len(pairs))  # each pair v.s. matches[:-1]
         matches = [(i, j)]
         c = 0
-        ## step(), search for the next match
+        # step(), search for the next match
         while True:
             if len(matches) == D:
                 break
 
-            ## update with dynamic programming, Cost(m, matches) = max{ Cost(m, matches[:-1]), Cost(m, matches[-1]) }
+            # update with dynamic programming, Cost(m, matches) = max{ Cost(m, matches[:-1]), Cost(m, matches[-1]) }
             costs = np.maximum(costs, cost([matches[-1]], pairs, Me11, Me22))  # (n, )
 
-            ## filter with geometric cost
+            # filter with geometric cost
             ind = np.argwhere(costs < thresh_geom_ratio).flatten()
             pairs = pairs[ind]
             costs = costs[ind]
@@ -179,27 +178,28 @@ def gmatch_search(pts1, pts2, Mf12):
             if len(pairs) == 0:
                 break
 
-            ## filter with flip-over test
-            flags = ~flipover(matches, pairs, pts1, pts2)  # (n, )
+            # filter with flip-over test
+            # flags = ~flipover(matches, pairs, pts1, pts2)  # (n, )
+
+            flags = volume_equal(matches, pairs, pts1, pts2)  # (n, )
             pairs_ = pairs[flags]
             costs_ = costs[flags]
 
             if len(pairs_) == 0:
                 break
 
-            ## get the best match
+            # get the best match
             best = np.argmin(costs_)
             c = max(c, costs_[best])
             matches.append(tuple(pairs_[best]))
 
-        if len(matches) > len(rlt):
+        if len(matches) > len(rlt) or (len(matches) == len(rlt) and c < rlt_cost):
             rlt = matches
             rlt_cost = c
         if len(rlt) == D:
             break
 
-    rlt = np.asarray(rlt)
-    return (rlt, rlt_cost) if len(rlt) >= 3 else (np.array([]), 1)
+    return np.asarray(rlt), rlt_cost
 
 
 def ransac_search(pts1, pts2, Mf12):
@@ -263,24 +263,23 @@ def Match(match_data: util.MatchData, cache_id=None, debug=-1):
     assert len(match_data.imgs_src) > 0, "imgs_src is empty"
     """ load from match_data """
     imgs_src, clds_src, masks_src = match_data.imgs_src, match_data.clds_src, match_data.masks_src
+    poses_src = match_data.poses_src
+
     img_dst, cld_dst, mask_dst = match_data.img_dst, match_data.cld_dst, match_data.mask_dst
 
     kp_dst, feat_dst = detector.detectAndCompute(img_dst, mask_dst)  # 0.3s for 1920x1080 => 0.014s for 211x200
 
     if len(kp_dst) == 0:
         print("No keypoints found in img2")
-        match_data.matches_list = [[]]
-        match_data.cost_list = [1]
-        match_data.uvs_src = []
-        match_data.uv_dst = None
-        match_data.idx_best = 0
+        match_data.matches = np.zeros((0, 2), dtype=np.int32)
         return
     uv_dst = np.array([k.pt for k in kp_dst], dtype=np.int32)
-    pts_dst = cld_dst[uv_dst[:, 1], uv_dst[:, 0]]
+    pt_dst = cld_dst[uv_dst[:, 1], uv_dst[:, 0]]
 
     """ extract the keypoints and features with descriptor """
-    matches_list = []
     uvs_src = []
+    pts_src = []
+    feats_src = []
     for i, (img_src, cld_src, mask_src) in enumerate(zip(imgs_src, clds_src, masks_src)):
         kp_src, feat_src = (
             CACHE[(cache_id, i)] if (cache_id, i) in CACHE else detector.detectAndCompute(img_src, mask_src)
@@ -290,44 +289,60 @@ def Match(match_data: util.MatchData, cache_id=None, debug=-1):
             CACHE[(cache_id, i)] = (kp_src, feat_src)
 
         if len(kp_src) == 0:
-            matches_list.append(([], 1))
+            uv_src.append(np.zeros((0, 2), dtype=np.int32))
+            pts_src.append(np.zeros((0, 3)))
+            feats_src.append(np.zeros((0, feat_src.shape[1])))
             continue
+
         uv_src = np.array([k.pt for k in kp_src], dtype=np.int32)
-        pts_src = cld_src[uv_src[:, 1], uv_src[:, 0]]
+        pts_src.append(util.transform(cld_src[uv_src[:, 1], uv_src[:, 0]], poses_src[i]))
         uvs_src.append(uv_src)
+        feats_src.append(feat_src)
 
-        """ Feature Distance Matrix (for visual similarity) """
-        Mf12 = feat_mat(feat_src, feat_dst)
+    if debug > 1:
+        for img_src, uv_src, feat_src in zip(imgs_src, uvs_src, feats_src):
+            Mf12 = feat_mat(feat_src, feat_dst)
+            util.plot_keypoints(img_src, img_dst, uv_src, uv_dst, Mf12, thresh_feat, show_immidiate=False)
+            plt.gcf().canvas.mpl_connect("key_press_event", on_key)
+        plt.show()
 
-        """ <Tune>
-            N1 and N2: plot to see whether keypoints are enough
-            thresh_feat: find a suitable threshold for feature distance
-        """
-        if debug > 1:
-            util.plot_keypoints(img_src, img_dst, uv_src, uv_dst, Mf12, thresh_feat)
-        matches, cost = gmatch_search(pts_src, pts_dst, Mf12)
-        matches_list.append((matches, cost))
+    """ concatenate all keypoints and features """
+    pt_src = np.concatenate(pts_src, axis=0)
+    feat_src = np.concatenate(feats_src, axis=0)
+    """ Feature Distance Matrix """
+    Mf12 = feat_mat(feat_src, feat_dst)
 
-        """ visualization """
-        if debug > 0:
-            if len(matches) < 3:
-                print(f"\timgs_src[{i}]: matches NOT found.")
-            else:
-                print(f"\timgs_src[{i}]: matches found. depth {len(matches)}, cost {cost:.3f}")
-                util.plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
-
-        if len(matches) == D:
-            break
+    matches, cost = gmatch_search(pt_src, pt_dst, Mf12)
 
     """ take max depth matches as the best """
-    match_data.matches_list, match_data.cost_list = zip(*matches_list)
-    match_data.uvs_src = uvs_src
-    match_data.uv_dst = uv_dst
-    match_data.idx_best = np.argmax([len(matches) for matches, _ in matches_list])
+    match_data.pt_src = pt_src
+    match_data.pt_dst = pt_dst
+    match_data.matches = matches
+    match_data.cost = cost
 
     """ visualization """
-    if debug > -1 and len(match_data.matches_list[match_data.idx_best]) > 0:
-        img_src = imgs_src[match_data.idx_best]
-        uv_src = uvs_src[match_data.idx_best]
-        matches = matches_list[match_data.idx_best][0]
-        util.plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
+    if debug > -1 and len(matches) > 0:
+        matches_list = split_matches(matches, uvs_src)
+        for matches, img_src, uv_src in zip(matches_list, imgs_src, uvs_src):
+            util.plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]], show_immidiate=False)
+            plt.gcf().canvas.mpl_connect("key_press_event", on_key)
+        plt.show()
+
+
+def on_key(event):
+    if event.key == "q":
+        plt.close("all")
+
+
+def split_matches(matches, uvs):
+    n = len(uvs)
+    matches_list = [[] for _ in range(n)]
+
+    lengths = np.array([len(uv) for uv in uvs])  # Shape: (n_sources,)
+    ind = np.repeat(np.arange(n), lengths)  # Repeat i, len(uv_src[i]) times
+    offset = np.concatenate([np.arange(k) for k in lengths])  # Concatenate [0,1,...,n-1] for each
+
+    for i, j in matches:
+        matches_list[ind[i]].append((offset[i], j))
+    matches_list = [np.array(m) if len(m) > 0 else np.zeros((0, 2), dtype=int) for m in matches_list]
+    return matches_list
