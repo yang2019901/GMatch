@@ -287,7 +287,7 @@ def run_per_object(dataset_name, scene_id, img_id, obj_id, mask_id, debug):
 
 
 if __name__ == "__main__":
-    run_per_object("ycbv", 54, 22, 2, 0, debug=-1)
-    # run_ycbv_targets("ycbv", [(54, 2, 0)], debug=1, icp_refine=False)
+    # run_per_object("ycbv", 54, 22, 2, 0, debug=-1)
+    run_ycbv_targets("ycbv", [(54, 2, 0)], debug=1, icp_refine=False)
     # run_per_dataset("hope", "./targets_manual_label.json", "result_hope-test.csv")
     # run_per_dataset("ycbv", "./bop_data/ycbv/test_targets_bop19.json", "result_ycbv-test.csv")

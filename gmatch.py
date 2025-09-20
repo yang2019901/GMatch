@@ -13,7 +13,7 @@ import util
 
 
 logger = logging.getLogger(__file__)
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.WARN)
 h = logging.StreamHandler(sys.stdout)
 h.setFormatter(logging.Formatter("[%(levelname)5s] [%(funcName)s] %(message)s"))
 logger.addHandler(h)
@@ -31,7 +31,7 @@ detector: cv2.SIFT = cv2.SIFT_create()
 # detector.setContrastThreshold(0.03)
 N_good = 32  # number of good matches candidates
 D = 24  # max search depth
-thresh_feat = 0.65  # threshold for feature distance, used to judge the similarity of two feature vectors
+thresh_feat = 0.6  # threshold for feature distance, used to judge the similarity of two feature vectors
 feat_mat = lambda feat1, feat2: sift_mat(feat1, feat2)  # feature distance matrix
 
 
@@ -116,7 +116,7 @@ def volume_equal(matches, pairs, pts1, pts2):
     v2 = pts2[pairs[:, 1]] - pts2[m[0][1]]  # (n, 3)
     V1 = np.sum(S1 * v1, axis=-1)  # (n, )
     V2 = np.sum(S2 * v2, axis=-1)  # (n, )
-    flags = np.abs(V1 - V2) < 1e-5  # unit: m^3
+    flags = V1 * V2 >= 0  # unit: m^3
     return flags
 
 
@@ -157,23 +157,54 @@ def gmatch_search(pts1, pts2, Mf12):
     if len(pairs_simi) == 0:
         return np.array([]), 1
 
+    k = 8
+    t0 = time.time()
+    # Branch and bound
+    li = []
     for i, j in pairs_good:
-        pairs = pairs_simi
-        costs = np.zeros(len(pairs))  # each pair v.s. matches[:-1]
         matches = [(i, j)]
-        c = 0
-        # step(), search for the next match
+        costs = cost(matches, pairs_simi, Me11, Me22)  # (n, )
+        flags = costs < thresh_geom_ratio
+        costs = costs[flags]
+        pairs = pairs_simi[flags]
+        ind = np.argpartition(costs, k)[:k] if k < len(costs) else np.arange(len(costs), dtype=int)
+        for idx in ind:
+            li.append(([(i, j), tuple(pairs[idx])], pairs, costs, costs[idx]))
+    logger.info(f"step1 cost: {time.time()-t0:.3f}s")
+
+    # logger.info(f"Initial candidates: {len(li)}")
+    # li = sorted(li, key=lambda x: x[3])[:N_good]
+    # logger.info(f"Filtered candidates: {len(li)}, max pairs length: {len(li[0][1])}")
+
+    # Branch and bound again (to resolve chirality issue)
+    li2 = []
+    t0 = time.time()
+    for matches, pairs, costs, c in li:
+        costs = np.maximum(costs, cost([matches[-1]], pairs, Me11, Me22))  # (n, )
+        flags = costs < thresh_geom_ratio
+        costs = costs[flags]
+        pairs = pairs[flags]
+        ind = np.argpartition(costs, k)[:k] if k < len(costs) else np.arange(len(costs), dtype=int)
+        for idx in ind:
+            li2.append((matches + [tuple(pairs[idx])], pairs, costs, max(c, costs[idx])))
+    logger.info(f"step2 cost: {time.time()-t0:.3f}s")
+    logger.info(f"Initial candidates 2: {len(li2)}")
+    li2 = sorted(li2, key=lambda x: len(x[1]), reverse=True)[:N_good*k]
+    logger.info(f"Filtered candidates 2: {len(li2):<2}, max pairs length: {len(li2[0][1])}")
+
+    for i, (matches, pairs, costs, c) in enumerate(li2):
+        logger.info(f"No.{i:<2}, initial matches: {matches}, candidate pairs: {len(pairs)}")
         while True:
-            if len(matches) == D:
+            if len(matches) >= D:
                 break
 
             # update with dynamic programming, Cost(m, matches) = max{ Cost(m, matches[:-1]), Cost(m, matches[-1]) }
             costs = np.maximum(costs, cost([matches[-1]], pairs, Me11, Me22))  # (n, )
 
             # filter with geometric cost
-            ind = np.argwhere(costs < thresh_geom_ratio).flatten()
-            pairs = pairs[ind]
-            costs = costs[ind]
+            flags = costs < thresh_geom_ratio
+            pairs = pairs[flags]
+            costs = costs[flags]
 
             if len(pairs) == 0:
                 break
@@ -193,12 +224,17 @@ def gmatch_search(pts1, pts2, Mf12):
             c = max(c, costs_[best])
             matches.append(tuple(pairs_[best]))
 
+        logger.info(f"No.{i:<2}, final matches ({len(matches):<2}): {matches}, cost: {c:.3f}")
+
         if len(matches) > len(rlt) or (len(matches) == len(rlt) and c < rlt_cost):
             rlt = matches
             rlt_cost = c
-        if len(rlt) == D:
+
+        # early stop
+        if len(rlt) >= D:
             break
 
+    logging.info(f"Final matches ({len(rlt):<2}): {rlt}, cost: {rlt_cost:.3f}")
     return np.asarray(rlt), rlt_cost
 
 
@@ -273,7 +309,10 @@ def Match(match_data: util.MatchData, cache_id=None, debug=-1):
         print("No keypoints found in img2")
         match_data.matches = np.zeros((0, 2), dtype=np.int32)
         return
+
     uv_dst = np.array([k.pt for k in kp_dst], dtype=np.int32)
+    uv_dst, uniq_ind = np.unique(uv_dst, axis=0, return_index=True)
+    feat_dst = feat_dst[uniq_ind]
     pt_dst = cld_dst[uv_dst[:, 1], uv_dst[:, 0]]
 
     """ extract the keypoints and features with descriptor """
@@ -295,6 +334,9 @@ def Match(match_data: util.MatchData, cache_id=None, debug=-1):
             continue
 
         uv_src = np.array([k.pt for k in kp_src], dtype=np.int32)
+        uv_src, uniq_ind = np.unique(uv_src, axis=0, return_index=True)
+        feat_src = feat_src[uniq_ind]
+
         pts_src.append(util.transform(cld_src[uv_src[:, 1], uv_src[:, 0]], poses_src[i]))
         uvs_src.append(uv_src)
         feats_src.append(feat_src)
@@ -324,6 +366,8 @@ def Match(match_data: util.MatchData, cache_id=None, debug=-1):
     if debug > -1 and len(matches) > 0:
         matches_list = split_matches(matches, uvs_src)
         for matches, img_src, uv_src in zip(matches_list, imgs_src, uvs_src):
+            if len(matches) == 0:
+                continue
             util.plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]], show_immidiate=False)
             plt.gcf().canvas.mpl_connect("key_press_event", on_key)
         plt.show()
