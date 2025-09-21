@@ -11,9 +11,11 @@ sys.path.append(os.path.dirname(__file__))
 
 import util
 
+import warnings
+warnings.filterwarnings("error", category=RuntimeWarning)
 
 logger = logging.getLogger(__file__)
-logger.setLevel(logging.WARN)
+logger.setLevel(logging.WARNING)
 h = logging.StreamHandler(sys.stdout)
 h.setFormatter(logging.Formatter("[%(levelname)5s] [%(funcName)s] %(message)s"))
 logger.addHandler(h)
@@ -105,36 +107,17 @@ def cost(matches, pairs, Me11, Me22):
     return c  # (n, )
 
 
-def volume_equal(matches, pairs, pts1, pts2):
-    """pairs: (n, 2), return (n, ) boolean array"""
-    if len(matches) < 3:
-        return np.ones(len(pairs), dtype=bool)
-    m = matches  # alias
-    S1 = np.cross(pts1[m[0][0]] - pts1[m[-1][0]], pts1[m[0][0]] - pts1[m[-2][0]])
-    S2 = np.cross(pts2[m[0][1]] - pts2[m[-1][1]], pts2[m[0][1]] - pts2[m[-2][1]])
-    v1 = pts1[pairs[:, 0]] - pts1[m[0][0]]  # (n, 3)
-    v2 = pts2[pairs[:, 1]] - pts2[m[0][1]]  # (n, 3)
-    V1 = np.sum(S1 * v1, axis=-1)  # (n, )
-    V2 = np.sum(S2 * v2, axis=-1)  # (n, )
-    flags = V1 * V2 >= 0  # unit: m^3
-    return flags
-
-
-def flipover(matches, pairs, pts1, pts2):
-    """flipover judgement
-    pairs: (n, 2), return (n, ) boolean array"""
-    global thresh_flip
-    if len(matches) < 2:
-        return np.zeros(len(pairs), dtype=bool)
-    v1_1 = pts1[matches[-2][0]] - pts1[matches[-1][0]]
-    v1_2 = pts1[pairs[:, 0]] - pts1[matches[-1][0]]
-    v2_1 = pts2[matches[-2][1]] - pts2[matches[-1][1]]
-    v2_2 = pts2[pairs[:, 1]] - pts2[matches[-1][1]]
-    n1, n2 = np.cross(v1_1, v1_2), np.cross(v2_1, v2_2)
-    n1 = np.divide(n1, np.linalg.norm(n1, axis=-1, keepdims=True), out=np.zeros_like(n1), where=n1 != 0)
-    n2 = np.divide(n2, np.linalg.norm(n2, axis=-1, keepdims=True), out=np.zeros_like(n2), where=n2 != 0)
-    flags = np.bitwise_and(n1[:, 2] * n2[:, 2] < 0, np.abs(n1[:, 2] - n2[:, 2]) > thresh_flip)
-    return flags
+def update_cov(Cov, mean, x, n):
+    """update covariance matrix with new point x
+    Cov: (3, 3)
+    mean: (3, )
+    x: (3, )
+    n: int, number of points before adding x
+    """
+    Corr = n * (Cov + np.outer(mean, mean)) + np.outer(x, x)
+    mean = (mean * n + x) / (n + 1)
+    Cov = Corr / (n + 1) - np.outer(mean, mean)
+    return Cov, mean
 
 
 def gmatch_search(pts1, pts2, Mf12):
@@ -170,13 +153,14 @@ def gmatch_search(pts1, pts2, Mf12):
         ind = np.argpartition(costs, k)[:k] if k < len(costs) else np.arange(len(costs), dtype=int)
         for idx in ind:
             li.append(([(i, j), tuple(pairs[idx])], pairs, costs, costs[idx]))
+
     logger.info(f"step1 cost: {time.time()-t0:.3f}s")
 
     # logger.info(f"Initial candidates: {len(li)}")
     # li = sorted(li, key=lambda x: x[3])[:N_good]
     # logger.info(f"Filtered candidates: {len(li)}, max pairs length: {len(li[0][1])}")
 
-    # Branch and bound again (to resolve chirality issue)
+    # Branch and bound again (because 3 pairs can determine a SE(3) transformation if not colinear)
     li2 = []
     t0 = time.time()
     for matches, pairs, costs, c in li:
@@ -187,13 +171,21 @@ def gmatch_search(pts1, pts2, Mf12):
         ind = np.argpartition(costs, k)[:k] if k < len(costs) else np.arange(len(costs), dtype=int)
         for idx in ind:
             li2.append((matches + [tuple(pairs[idx])], pairs, costs, max(c, costs[idx])))
+
     logger.info(f"step2 cost: {time.time()-t0:.3f}s")
+
     logger.info(f"Initial candidates 2: {len(li2)}")
-    li2 = sorted(li2, key=lambda x: len(x[1]), reverse=True)[:N_good*k]
+    li2 = sorted(li2, key=lambda x: len(x[1]), reverse=True)[: N_good * k]
     logger.info(f"Filtered candidates 2: {len(li2):<2}, max pairs length: {len(li2[0][1])}")
 
     for i, (matches, pairs, costs, c) in enumerate(li2):
         logger.info(f"No.{i:<2}, initial matches: {matches}, candidate pairs: {len(pairs)}")
+        idx1, idx2 = zip(*matches)
+        mean1 = np.mean(pts1[idx1, :], axis=0)
+        mean2 = np.mean(pts2[idx2, :], axis=0)
+        Cov1 = np.cov(pts1[idx1, :].T, bias=True)  # 1/n xi xi^T - mu mu^T
+        Cov2 = np.cov(pts2[idx2, :].T, bias=True)
+
         while True:
             if len(matches) >= D:
                 break
@@ -209,10 +201,28 @@ def gmatch_search(pts1, pts2, Mf12):
             if len(pairs) == 0:
                 break
 
-            # filter with flip-over test
-            # flags = ~flipover(matches, pairs, pts1, pts2)  # (n, )
+            w1, v1 = np.linalg.eigh(Cov1)
+            w2, v2 = np.linalg.eigh(Cov2)
+            w1 = np.sqrt(np.abs(w1))  # sqrt to make it comparable to stddev
+            w2 = np.sqrt(np.abs(w2))
+            if np.any(np.abs(w1 - w2) >= thresh_geom_abs):
+                break
+            if w1[1] < thresh_geom_abs:
+                logger.info(f"points in pts1 are colinear.")
+                # get the best match
+                best = np.argmin(costs)
+                c = max(c, costs[best])
+                Cov1, mean1 = update_cov(Cov1, mean1, pts1[pairs[best, 0]], len(matches))
+                Cov2, mean2 = update_cov(Cov2, mean2, pts2[pairs[best, 1]], len(matches))
+                matches.append(tuple(pairs[best]))
+                continue
 
-            flags = volume_equal(matches, pairs, pts1, pts2)  # (n, )
+            assert w1[0] < thresh_geom_abs
+
+            d1 = np.dot(pts1[pairs[:, 0]] - mean1, v1[:, 0])
+            d2 = np.dot(pts2[pairs[:, 1]] - mean2, v2[:, 0])
+            flags = (np.abs(d1 - d2) < thresh_geom_abs) & (d1 * d2 >= 0)
+
             pairs_ = pairs[flags]
             costs_ = costs[flags]
 
@@ -222,6 +232,10 @@ def gmatch_search(pts1, pts2, Mf12):
             # get the best match
             best = np.argmin(costs_)
             c = max(c, costs_[best])
+            logger.info(f"d1: {d1[flags][best]:.3f}, d2: {d2[flags][best]:.3f}")
+            if abs(d1[flags][best]) < thresh_geom_abs:
+                Cov1, mean1 = update_cov(Cov1, mean1, pts1[pairs_[best, 0]], len(matches))
+                Cov2, mean2 = update_cov(Cov2, mean2, pts2[pairs_[best, 1]], len(matches))
             matches.append(tuple(pairs_[best]))
 
         logger.info(f"No.{i:<2}, final matches ({len(matches):<2}): {matches}, cost: {c:.3f}")
@@ -234,7 +248,7 @@ def gmatch_search(pts1, pts2, Mf12):
         if len(rlt) >= D:
             break
 
-    logging.info(f"Final matches ({len(rlt):<2}): {rlt}, cost: {rlt_cost:.3f}")
+    logger.info(f"Final matches ({len(rlt):<2}): {rlt}, cost: {rlt_cost:.3f}")
     return np.asarray(rlt), rlt_cost
 
 
@@ -320,31 +334,31 @@ def Match(match_data: util.MatchData, cache_id=None, debug=-1):
     pts_src = []
     feats_src = []
     for i, (img_src, cld_src, mask_src) in enumerate(zip(imgs_src, clds_src, masks_src)):
-        kp_src, feat_src = (
-            CACHE[(cache_id, i)] if (cache_id, i) in CACHE else detector.detectAndCompute(img_src, mask_src)
-        )
-
-        if cache_id is not None:
-            CACHE[(cache_id, i)] = (kp_src, feat_src)
-
-        if len(kp_src) == 0:
-            uv_src.append(np.zeros((0, 2), dtype=np.int32))
-            pts_src.append(np.zeros((0, 3)))
-            feats_src.append(np.zeros((0, feat_src.shape[1])))
-            continue
-
-        uv_src = np.array([k.pt for k in kp_src], dtype=np.int32)
-        uv_src, uniq_ind = np.unique(uv_src, axis=0, return_index=True)
-        feat_src = feat_src[uniq_ind]
-
-        pts_src.append(util.transform(cld_src[uv_src[:, 1], uv_src[:, 0]], poses_src[i]))
+        if cache_id in CACHE:
+            uv_src, feat_src, pt_src = CACHE[(cache_id, i)]
+        else:
+            kp_src, feat_src = detector.detectAndCompute(img_src, mask_src)
+            if len(kp_src) == 0:
+                uv_src = np.zeros((0, 2), dtype=np.int32)
+                pt_src = np.zeros((0, 3), dtype=np.float32)
+                feat_src = np.zeros(
+                    (0, detector.descriptorSize), dtype=np.bool_
+                )  # use weak dtype to avoid descriptor dtype being promoted unexpectedly when concatenating
+            else:
+                uv_src = np.array([k.pt for k in kp_src], dtype=np.int32)
+                uv_src, uniq_ind = np.unique(uv_src, axis=0, return_index=True)
+                feat_src = feat_src[uniq_ind]
+                pt_src = util.transform(cld_src[uv_src[:, 1], uv_src[:, 0]], poses_src[i])
+            if cache_id is not None:
+                CACHE[(cache_id, i)] = (uv_src, feat_src, pt_src)
         uvs_src.append(uv_src)
+        pts_src.append(pt_src)
         feats_src.append(feat_src)
 
     if debug > 1:
-        for img_src, uv_src, feat_src in zip(imgs_src, uvs_src, feats_src):
-            Mf12 = feat_mat(feat_src, feat_dst)
-            util.plot_keypoints(img_src, img_dst, uv_src, uv_dst, Mf12, thresh_feat, show_immidiate=False)
+        for img, uv, feat in zip(imgs_src, uvs_src, feats_src):
+            Mf12 = feat_mat(feat, feat_dst)
+            util.plot_keypoints(img, img_dst, uv, uv_dst, Mf12, thresh_feat, show_immidiate=False)
             plt.gcf().canvas.mpl_connect("key_press_event", on_key)
         plt.show()
 
