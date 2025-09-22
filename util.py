@@ -61,10 +61,11 @@ class MatchData:
         self.cld_dst = None
         self.mask_dst = None
         """ match result """
-        self.pt_src = None  # (n1, 3), float32
-        self.pt_dst = None  # (n2, 3), float32
-        self.matches = None  # best correspondences, (N, 2)
-        self.cost = None
+        self.matches_list = []  # list of matches, see gmatch.match_features
+        self.cost_list = []  # list of cost, ranging 0-1, see gmatch.match_features
+        self.uvs_src = []  # keypoints extracted from each source image
+        self.uv_dst = None  # keypoints extracted from the destination image
+        self.idx_best = None  # index of the best matches (longest)
         """ pose estimation result """
         self.mat_m2c = None  # model to camera transformation matrix, 4x4
 
