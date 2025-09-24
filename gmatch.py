@@ -20,18 +20,14 @@ logger.addHandler(h)
 logger.propagate = False
 
 
-HAM_TAB = np.array(
-    [bin(i).count("1") for i in range(256)], dtype=np.uint8
-)  # for computing hamming distance, only ORB uses it now
 CACHE = {}  # cache for keypoints and features of imgs_src
-
 
 """ SIFT settings """
 detector: cv2.SIFT = cv2.SIFT_create()
 detector.setContrastThreshold(0.03)
 N_good = 24  # number of good matches candidates
 D = 24  # max search depth
-thresh_feat = 0.6  # threshold for feature distance, used to judge the similarity of two feature vectors
+thresh_feat = 0.65  # threshold for feature distance, used to judge the similarity of two feature vectors
 feat_mat = lambda feat1, feat2: sift_mat(feat1, feat2, rootsift=True)  # feature distance matrix
 
 """ GMatch settings """
@@ -41,26 +37,6 @@ thresh_geom_ratio = 0.1
 thresh_geom_abs = 0.005
 # threshold for flipover judgement
 thresh_flip = 0.8
-
-
-def orb_mat(feat1, feat2):
-    """Compute feature distance matrix `Mf` for ORB, whose metric is Hamming distance.
-    > Mh[i, j] == HamDist(feat1[i], feat2[j])
-
-    - feat1: (n1, 32), uint8
-    - feat2: (n2, 32), uint8
-    """
-    global HAM_TAB
-    # broadcast feat1 and feat2
-    feat1_ = feat1[:, np.newaxis, :]
-    feat2_ = feat2[np.newaxis, :, :]
-    # compute xor result
-    xor_result = feat1_ ^ feat2_
-    # compute hamming distance
-    hamming_distances = HAM_TAB[xor_result]
-    # sum along the last axis to get the hamming distance matrix
-    Mf = np.sum(hamming_distances, axis=-1)
-    return Mf
 
 
 def sift_mat(feat1, feat2, rootsift):
@@ -127,7 +103,6 @@ def gmatch_search_greedy(pts1, pts2, Mf12):
         np.argpartition(np.reshape(Mf12, -1), N_good)[:N_good] if N_good < n1 * n2 else np.arange(n1 * n2, dtype=int)
     )
     pairs_good = np.array(np.unravel_index(part_indices, Mf12.shape)).T
-    # pairs_good = np.argwhere(Mf12 < 0.1)
 
     pairs_simi = np.argwhere(Mf12 < thresh_feat)
     logger.info(f"Found {len(pairs_simi)} similar pairs.")
@@ -303,7 +278,7 @@ def ransac_search(pts1, pts2, Mf12):
     if len(pairs_simi) == 0:
         return (np.array([]), 1)
 
-    result = ransac.registration_ransac_based_on_correspondence(pts1, pts2, pairs_simi, 0.008, max_iteration=1000)
+    result = ransac.registration_ransac_based_on_correspondence(pts1, pts2, pairs_simi, thresh_geom_abs, max_iteration=1000)
     if result is None or result.correspondence_set is None:
         logger.warning("RANSAC failed to find enough correspondences.")
         return (np.array([]), 1)
@@ -315,6 +290,10 @@ def teaserpp_search(pts1, pts2, Mf12):
     import teaserpp_python
 
     pairs_simi = np.argwhere(Mf12 < thresh_feat)
+    max_pairs = 2000
+    # NOTE: too many pairs will cause teaserpp to be very slow or even crash
+    if len(pairs_simi) > max_pairs: 
+        pairs_simi = pairs_simi[np.argpartition(Mf12[pairs_simi[:, 0], pairs_simi[:, 1]], max_pairs)[:max_pairs]]
     logger.info(f"Found {len(pairs_simi)} similar pairs.")
 
     if len(pairs_simi) == 0:
@@ -341,7 +320,7 @@ def teaserpp_search(pts1, pts2, Mf12):
     solution = solver.getSolution()
     R = solution.rotation.reshape(3, 3)
     t = solution.translation.reshape(3, 1)
-    mask = np.linalg.norm(R @ src + t - dst, axis=0) < 0.003
+    mask = np.linalg.norm(R @ src + t - dst, axis=0) < thresh_geom_abs
     return np.array(pairs_simi[mask]), 0
 
 

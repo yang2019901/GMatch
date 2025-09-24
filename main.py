@@ -71,7 +71,7 @@ def load(meta_data: util.MetaData, match_data: util.MatchData):
     r1, c1 = ind.min(axis=0)
     r2, c2 = ind.max(axis=0)
     # uncomment this line to use bbox instead of segmentation
-    # mask_dst[r1 : r2 + 1, c1 : c2 + 1] = 255
+    mask_dst[r1 : r2 + 1, c1 : c2 + 1] = 255
     """ crop img_dst (and cld_dst) """
     img_dst = img_dst[r1 : r2 + 1, c1 : c2 + 1]
     mask_dst = mask_dst[r1 : r2 + 1, c1 : c2 + 1]
@@ -99,32 +99,6 @@ def solve(match_data: util.MatchData, icp_refine=False):
     cld_dst, mask_dst = match_data.cld_dst, match_data.mask_dst
 
     if len(matches) < 3:
-        # logging.warning(f"Too few ({len(matches)} < 3) matches found, switch to point cloud method.")
-        # # create point cloud
-        # voxel_sz = 0.005
-        # pcd_src, pcd_dst = o3d.geometry.PointCloud(), o3d.geometry.PointCloud()
-        # for i in range(len(clds_src)):
-        #     pts = util.transform(clds_src[i][masks_src[i] != 0], poses_src[i])
-        #     pcd_src.points.extend(o3d.utility.Vector3dVector(pts.reshape(-1, 3)))
-        # pcd_src = pcd_src.voxel_down_sample(voxel_size=voxel_sz)
-        # pcd_dst.points = o3d.utility.Vector3dVector(cld_dst[mask_dst != 0].reshape(-1, 3))
-        # pcd_dst = pcd_dst.voxel_down_sample(voxel_size=voxel_sz)
-
-        # pcd_dst.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=3 * voxel_sz, max_nn=30))
-        # pcd_src.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=3 * voxel_sz, max_nn=30))
-
-        # fpfh_src = o3d.pipelines.registration.compute_fpfh_feature(
-        #     pcd_src, o3d.geometry.KDTreeSearchParamHybrid(radius=5 * voxel_sz, max_nn=100)
-        # )
-
-        # fpfh_dst = o3d.pipelines.registration.compute_fpfh_feature(
-        #     pcd_dst, o3d.geometry.KDTreeSearchParamHybrid(radius=5 * voxel_sz, max_nn=100)
-        # )
-
-        # result = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
-        #     pcd_src, pcd_dst, fpfh_src, fpfh_dst, True, max_correspondence_distance=5 * voxel_sz
-        # )
-        # match_data.mat_m2c = result.transformation
         match_data.mat_m2c = np.eye(4)
         return
 
@@ -294,7 +268,8 @@ def run_per_object(dataset_name, scene_id, img_id, obj_id, mask_id, debug):
 
 if __name__ == "__main__":
     # run_per_object("ycbv", 56, 1, 1, 0, debug=0)
-    # run_per_object("hope", 5, 2, 21, 10, debug=2)
-    # run_ycbv_targets("ycbv", [(56, 1, 0)], debug=-1, icp_refine=False)
-    # run_per_dataset("hope", "./targets_manual_label.json", "result_hope-test.csv")
-    run_per_dataset("ycbv", "./bop_data/ycbv/test_targets_bop19.json", "result_ycbv-test.csv")
+    # run_per_object("hope", 3, 0, 9, 6, debug=2)
+    run_ycbv_targets("ycbv", [(48, 14, 2)], debug=0, icp_refine=True)
+    # run_per_dataset("hope", "./targets_manual_label.json", f"sift{gmatch.thresh_feat}-gmatch{gmatch.thresh_geom_ratio}_hope.csv")
+    # run_per_dataset("ycbv", "./bop_data/ycbv/test_targets_bop19.json", f"sift{gmatch.thresh_feat}-gmatch{gmatch.thresh_geom_ratio}_ycbv-test.csv")
+    # run_per_dataset("ycbv", "./bop_data/ycbv/test_targets_bop19.json", f"rootsift{gmatch.thresh_feat}-teaserpp_ycbv-test.csv")
