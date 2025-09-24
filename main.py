@@ -66,10 +66,11 @@ def load(meta_data: util.MetaData, match_data: util.MatchData):
     mask_dst = cv2.imread(meta_data.mask_path, cv2.IMREAD_UNCHANGED)
     cld_dst = util.depth2cld(depth_dst * (meta_data.depth_scale * 0.001), meta_data.cam_intrin)
 
-    """ get bbox from mask_dst (orb/sift can work well with bbox, no need for segmentation) """
+    """ get bbox from mask_dst """
     ind = np.argwhere(mask_dst != 0)
     r1, c1 = ind.min(axis=0)
     r2, c2 = ind.max(axis=0)
+    # uncomment this line to use bbox instead of segmentation
     mask_dst[r1 : r2 + 1, c1 : c2 + 1] = 255
     """ crop img_dst (and cld_dst) """
     img_dst = img_dst[r1 : r2 + 1, c1 : c2 + 1]
@@ -92,65 +93,36 @@ def load(meta_data: util.MetaData, match_data: util.MatchData):
 
 def solve(match_data: util.MatchData, icp_refine=False):
     """solve correspondence with the best match in match_data"""
-
     matches = match_data.matches
-    pt_src = match_data.pt_src
-    pt_dst = match_data.pt_dst
-
     clds_src, masks_src, poses_src = match_data.clds_src, match_data.masks_src, match_data.poses_src
     cld_dst, mask_dst = match_data.cld_dst, match_data.mask_dst
 
     if len(matches) < 3:
-        logging.warning(f"Too few ({len(matches)}) matches found, switch to point cloud method.")
-        # create point cloud
-        voxel_sz = 0.005
-        pcd_src, pcd_dst = o3d.geometry.PointCloud(), o3d.geometry.PointCloud()
-        for i in range(len(clds_src)):
-            pt = util.transform(clds_src[i][masks_src[i] != 0], poses_src[i])
-            pcd_src.points.extend(o3d.utility.Vector3dVector(pt.reshape(-1, 3)))
-        pcd_src = pcd_src.voxel_down_sample(voxel_size=voxel_sz)
-        pcd_dst.points = o3d.utility.Vector3dVector(cld_dst[mask_dst != 0].reshape(-1, 3))
-        pcd_dst = pcd_dst.voxel_down_sample(voxel_size=voxel_sz)
-
-        pcd_dst.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=3 * voxel_sz, max_nn=30))
-        pcd_src.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=3 * voxel_sz, max_nn=30))
-
-        fpfh_src = o3d.pipelines.registration.compute_fpfh_feature(
-            pcd_src, o3d.geometry.KDTreeSearchParamHybrid(radius=5 * voxel_sz, max_nn=100)
-        )
-
-        fpfh_dst = o3d.pipelines.registration.compute_fpfh_feature(
-            pcd_dst, o3d.geometry.KDTreeSearchParamHybrid(radius=5 * voxel_sz, max_nn=100)
-        )
-
-        result = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
-            pcd_src, pcd_dst, fpfh_src, fpfh_dst, True, max_correspondence_distance=5 * voxel_sz
-        )
-        match_data.mat_m2c = result.transformation
+        match_data.mat_m2c = np.eye(4)
         return
 
-    # solve correspondence
+    """ solve correspondence """
     pcd1, pcd2 = o3d.geometry.PointCloud(), o3d.geometry.PointCloud()
-    pcd1.points = o3d.utility.Vector3dVector(pt_src[matches[:, 0], :])
-    pcd2.points = o3d.utility.Vector3dVector(pt_dst[matches[:, 1], :])
+    pcd1.points = o3d.utility.Vector3dVector(match_data.pt_src[matches[:, 0], :])
+    pcd2.points = o3d.utility.Vector3dVector(match_data.pt_dst[matches[:, 1], :])
     corres = o3d.utility.Vector2iVector([[i, i] for i in range(len(matches))])
-    # Kabsch
+    """ Kabsch """
     estim = o3d.pipelines.registration.TransformationEstimationPointToPoint()
     mat_m2c = estim.compute_transformation(pcd1, pcd2, corres)
 
     if icp_refine:
-        # create point cloud
+        """create point cloud"""
         pcd_src, pcd_dst = o3d.geometry.PointCloud(), o3d.geometry.PointCloud()
         for i in range(len(clds_src)):
-            pt = util.transform(clds_src[i][masks_src[i] != 0], poses_src[i])
-            pcd_src.points.extend(o3d.utility.Vector3dVector(pt.reshape(-1, 3)))
+            pts = util.transform(clds_src[i][masks_src[i] != 0], poses_src[i])
+            pcd_src.points.extend(o3d.utility.Vector3dVector(pts.reshape(-1, 3)))
         pcd_src = pcd_src.voxel_down_sample(voxel_size=0.002)
         pcd_dst.points = o3d.utility.Vector3dVector(cld_dst[mask_dst != 0].reshape(-1, 3))
-        # refine with icp
+        """ refine with icp """
         rlt = o3d.pipelines.registration.registration_icp(pcd_src, pcd_dst, 0.01, mat_m2c)
         mat_m2c = rlt.transformation
 
-    # store result
+    """ store result """
     logger.debug(f"model in camera, pos: \n{mat_m2c}")
     match_data.mat_m2c = mat_m2c
 
@@ -161,8 +133,8 @@ def result2record(meta_data: util.MetaData, match_data: util.MatchData):
     score = len(match_data.matches)
     ## Note: convert `t` to mm, leave `R` as it is for it has no unit
     R, t = match_data.mat_m2c[:3, :3], match_data.mat_m2c[:3, 3] * 1000
-    R = " ".join(map(lambda x: f"{x:.6f}", R.flatten().tolist()))
-    t = " ".join(map(lambda x: f"{x:.6f}", t.flatten().tolist()))
+    R = " ".join(map(lambda x: f"{x:.2f}", R.flatten().tolist()))
+    t = " ".join(map(lambda x: f"{x:.2f}", t.flatten().tolist()))
     return [str(scene_id), str(im_id), str(obj_id), str(score), R, t]
 
 
@@ -174,11 +146,11 @@ def process_img(meta_data: util.MetaData, match_data: util.MatchData, targets):
     record_list = []
     for target in targets:
         mask_id, scene_id, img_id, obj_id = target
-        logger.debug(f"scene: {scene_id}, img: {img_id}, mask: {mask_id}")
+        logger.info(f"scene: {scene_id}, img: {img_id}, mask: {mask_id}")
         meta_data.init(pt_id=obj_id, scene_id=scene_id, img_id=img_id, mask_id=mask_id)
         load(meta_data, match_data)
-        gmatch.Match(match_data, meta_data.pt_id, debug=-1)
-        logger.debug(f"\tobj: {meta_data.pt_id}, len: {len(match_data.matches)}")
+        gmatch.Match(match_data, meta_data.pt_id, debug=0)
+        logger.info(f"\tobj: {meta_data.pt_id}, len: {len(match_data.matches)}")
         solve(match_data, icp_refine=True)
         record_list.append(result2record(meta_data, match_data))
     timespan = time.time() - t0
@@ -213,12 +185,12 @@ def run_per_dataset(dataset_name, targets_path, result_path):
         if line["inst_count"] > 1:
             num_dup += line["inst_count"] - 1
             objs_id.append(line["obj_id"])
-        targets.append((len(targets), line["scene_id"], line["im_id"], [line["obj_id"]]))
+        targets.append((len(targets), line["scene_id"], line["im_id"], line["obj_id"]))
 
         img_id_last = line["im_id"]
         scene_id_last = line["scene_id"]
 
-    logger.info("all images: ", len(targets_list))
+    logger.info(f"all images: {len(targets_list)}")
 
     with open(result_path, "w") as f:
         for targets in targets_list:
@@ -281,13 +253,16 @@ def run_per_object(dataset_name, scene_id, img_id, obj_id, mask_id, debug):
     t0 = time.time()
     gmatch.Match(match_data, debug=debug)
     logger.info(f"match time: {time.time() - t0:.3f}")
-    logger.info(f"best loss: {match_data.cost}")
+    logger.info(f"best loss: {match_data.cost:.3f}")
     logger.info(f"obj: {meta_data.pt_id}, len: {len(match_data.matches)}")
     solve(match_data)
+    logger.info(f"result pose (model in camera): \n{match_data.mat_m2c}")
 
 
 if __name__ == "__main__":
-    # run_per_object("ycbv", 54, 43, 2, 0, debug=1)
-    run_ycbv_targets("ycbv", [(54, 2, 0)], debug=1, icp_refine=False)
-    # run_per_dataset("hope", "./targets_manual_label.json", "result_hope-test.csv")
-    # run_per_dataset("ycbv", "./bop_data/ycbv/test_targets_bop19.json", "result_ycbv-test.csv")
+    # run_per_object("ycbv", 56, 1, 1, 0, debug=0)
+    # run_per_object("hope", 3, 0, 9, 6, debug=2)
+    # run_ycbv_targets("ycbv", [(56, 1, 0)], debug=0, icp_refine=True)
+    # run_per_dataset("hope", "./targets_manual_label.json", f"sift{gmatch.thresh_feat}-gmatch{gmatch.thresh_geom_ratio}_hope.csv")
+    run_per_dataset("ycbv", "./bop_data/ycbv/test_targets_bop19.json", f"sift{gmatch.thresh_feat}-gmatch{gmatch.thresh_geom_ratio}_ycbv-test.csv")
+    # run_per_dataset("ycbv", "./bop_data/ycbv/test_targets_bop19.json", f"rootsift{gmatch.thresh_feat}-teaserpp_ycbv-test.csv")
