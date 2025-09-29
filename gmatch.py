@@ -25,12 +25,12 @@ CACHE = {}  # cache for keypoints and features of imgs_src
 """ SIFT settings """
 detector: cv2.SIFT = cv2.SIFT_create()
 detector.setContrastThreshold(0.03)
-N_good = 24  # number of good matches candidates
-D = 24  # max search depth
-thresh_feat = 0.65  # threshold for feature distance, used to judge the similarity of two feature vectors
-feat_mat = lambda feat1, feat2: sift_mat(feat1, feat2, rootsift=True)  # feature distance matrix
+thresh_feat = 0.1  # threshold for feature distance, used to judge the similarity of two feature vectors
+feat_mat = lambda feat1, feat2: sift_mat(feat1, feat2, rootsift=False)  # feature distance matrix
 
 """ GMatch settings """
+N_good = 24  # number of good matches candidates
+L = 24  # max search length
 # threshold for geometric cost, applied to 3d distance error ratio when attempting to add `m` to matches.
 thresh_geom_ratio = 0.1
 # threshold for geometric cost, applied to 3d distance directly when attempting to add `m` to matches. (unit: meter)
@@ -116,7 +116,7 @@ def gmatch_search_greedy(pts1, pts2, Mf12):
         c = 0
         # step(), search for the next match
         while True:
-            if len(matches) == D:
+            if len(matches) == L:
                 break
 
             # update with dynamic programming, Cost(m, matches) = max{ Cost(m, matches[:-1]), Cost(m, matches[-1]) }
@@ -146,7 +146,7 @@ def gmatch_search_greedy(pts1, pts2, Mf12):
         if len(matches) > len(rlt) or (len(matches) == len(rlt) and c < rlt_cost):
             rlt = matches
             rlt_cost = c
-        if len(rlt) == D:
+        if len(rlt) == L:
             break
 
     return np.asarray(rlt), rlt_cost
@@ -229,7 +229,7 @@ def gmatch_search_bnb(pts1, pts2, Mf12):
             break
 
         while True:
-            if len(matches) >= D:
+            if len(matches) >= L:
                 break
 
             # update with dynamic programming, Cost(m, matches) = max{ Cost(m, matches[:-1]), Cost(m, matches[-1]) }
@@ -262,7 +262,7 @@ def gmatch_search_bnb(pts1, pts2, Mf12):
             rlt = matches
             rlt_cost = c
 
-        if len(rlt) >= D:
+        if len(rlt) >= L:
             break
 
     logger.info(f"Final matches ({len(rlt):<2}): {rlt}, cost: {rlt_cost:.3f}")
@@ -347,6 +347,9 @@ def Match(match_data: util.MatchData, cache_id=None, debug=-1):
         match_data.idx_best = 0
         return
     uv_dst = np.array([k.pt for k in kp_dst], dtype=np.int32)
+    mask = cld_dst[uv_dst[:, 1], uv_dst[:, 0], 2] > 1e-3
+    uv_dst = uv_dst[mask]
+    feat_dst = feat_dst[mask]
     pts_dst = cld_dst[uv_dst[:, 1], uv_dst[:, 0]]
 
     """ extract the keypoints and features with descriptor """
@@ -364,6 +367,10 @@ def Match(match_data: util.MatchData, cache_id=None, debug=-1):
                 uv_src = np.array([k.pt for k in kp_src], dtype=np.int32)
                 uv_src, ind = np.unique(uv_src, axis=0, return_index=True)
                 feat_src = feat_src[ind]
+                # filter out points with invalid depth
+                mask = cld_src[uv_src[:, 1], uv_src[:, 0], 2] > 1e-3
+                uv_src = uv_src[mask]
+                feat_src = feat_src[mask]
             if cache_id is not None:
                 CACHE[(cache_id, i)] = (uv_src, feat_src)
 
@@ -393,7 +400,7 @@ def Match(match_data: util.MatchData, cache_id=None, debug=-1):
                 print(f"\timgs_src[{i}]: matches found. depth {len(matches)}, cost {cost:.3f}")
                 util.plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
 
-        if len(matches) >= D:
+        if len(matches) == L:
             break
 
     """ take max depth matches as the best """
