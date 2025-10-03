@@ -430,6 +430,16 @@ def plot_matches(img1, img2, uv1, uv2, show_immidiate=True):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
     ax1.imshow(img1)
     ax2.imshow(img2)
+    # ax1.axis("off")
+    # ax2.axis("off")
+    # for pt1, pt2 in zip(uv1, uv2):
+    #     cir1 = patches.Circle(pt1, 5, color="red", fill=False, linewidth=2)
+    #     cir2 = patches.Circle(pt2, 4, color="red", fill=False, linewidth=2)
+    #     ax1.add_patch(cir1)
+    #     ax2.add_patch(cir2)
+    #     l = patches.ConnectionPatch(
+    #         xyA=pt1, xyB=pt2, axesA=ax1, axesB=ax2, coordsA="data", coordsB="data", color="red", linewidth=2
+    #     )
     for pt1, pt2 in zip(uv1, uv2):
         cir1 = patches.Circle(pt1, 5, color="red", fill=False)
         cir2 = patches.Circle(pt2, 2, color="red", fill=False)

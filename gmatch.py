@@ -25,8 +25,8 @@ CACHE = {}  # cache for keypoints and features of imgs_src
 """ SIFT settings """
 detector: cv2.SIFT = cv2.SIFT_create()
 detector.setContrastThreshold(0.03)
-thresh_feat = 0.1  # threshold for feature distance, used to judge the similarity of two feature vectors
-feat_mat = lambda feat1, feat2: sift_mat(feat1, feat2, rootsift=False)  # feature distance matrix
+thresh_feat = 0.65  # threshold for feature distance, used to judge the similarity of two feature vectors
+feat_mat = lambda feat1, feat2: sift_mat(feat1, feat2, rootsift=True)  # feature distance matrix
 
 """ GMatch settings """
 N_good = 24  # number of good matches candidates
@@ -84,8 +84,8 @@ def flipover(matches, pairs, pts1, pts2):
     v2_1 = pts2[matches[-2][1]] - pts2[matches[-1][1]]
     v2_2 = pts2[pairs[:, 1]] - pts2[matches[-1][1]]
     n1, n2 = np.cross(v1_1, v1_2), np.cross(v2_1, v2_2)
-    n1 = np.divide(n1, np.linalg.norm(n1, axis=-1, keepdims=True), out=np.zeros_like(n1), where=n1 != 0)
-    n2 = np.divide(n2, np.linalg.norm(n2, axis=-1, keepdims=True), out=np.zeros_like(n2), where=n2 != 0)
+    n1 /= np.linalg.norm(n1, axis=-1, keepdims=True) + 1e-5
+    n2 /= np.linalg.norm(n2, axis=-1, keepdims=True) + 1e-5 
     flags = np.bitwise_and(n1[:, 2] * n2[:, 2] < 0, np.abs(n1[:, 2] - n2[:, 2]) > thresh_flip)
     return flags
 
@@ -154,119 +154,11 @@ def gmatch_search_greedy(pts1, pts2, Mf12):
 
 def gmatch_search_bnb(pts1, pts2, Mf12):
     """Branch-and-Bound search with geometric constraints (distance matrix and flip-over removal)"""
-    n1, n2 = Mf12.shape
-    matches = []
-    rlt = []
-    rlt_cost = 1
-    Me11 = np.linalg.norm(pts1[:, np.newaxis, :] - pts1, axis=-1)
-    Me22 = np.linalg.norm(pts2[:, np.newaxis, :] - pts2, axis=-1)
-
-    part_indices = (
-        np.argpartition(np.reshape(Mf12, -1), N_good)[:N_good] if N_good < n1 * n2 else np.arange(n1 * n2, dtype=int)
-    )
-    pairs_good = np.array(np.unravel_index(part_indices, Mf12.shape)).T
-    # pairs_good = np.argwhere(Mf12 < 0.1)
-
-    pairs_simi = np.argwhere(Mf12 < thresh_feat)
-    logger.info(f"Found {len(pairs_simi)} similar pairs.")
-    if len(pairs_simi) == 0:
-        return np.array([]), 1
-
-    k = 8  # branch number
-    t0 = time.time()
-    # Branch and bound
-    li = []
-    for i, j in pairs_good:
-        matches = [(i, j)]
-        costs = cost(matches, pairs_simi, Me11, Me22)  # (n, )
-        flags = costs < thresh_geom_ratio
-        costs = costs[flags]
-        pairs = pairs_simi[flags]
-        ind = np.argpartition(costs, k)[:k] if k < len(costs) else np.arange(len(costs), dtype=int)
-        for idx in ind:
-            li.append(([(i, j), tuple(pairs[idx])], pairs, costs, costs[idx]))
-    logger.info(f"step1 cost: {time.time()-t0:.3f}s")
-
-    # logger.info(f"Initial candidates: {len(li)}")
-    # li = sorted(li, key=lambda x: x[3])[:N_good]
-    # logger.info(f"Filtered candidates: {len(li)}, max pairs length: {len(li[0][1])}")
-
-    # Branch and bound again (to resolve chirality issue)
-    li2 = []
-    t0 = time.time()
-    for matches, pairs, costs, c in li:
-        costs = np.maximum(costs, cost([matches[-1]], pairs, Me11, Me22))  # (n, )
-        flags = costs < thresh_geom_ratio
-        costs = costs[flags]
-        pairs = pairs[flags]
-        ind = np.argpartition(costs, k)[:k] if k < len(costs) else np.arange(len(costs), dtype=int)
-        for idx in ind:
-            li2.append((matches + [tuple(pairs[idx])], pairs, costs, max(c, costs[idx])))
-    logger.info(f"step2 cost: {time.time()-t0:.3f}s")
-
-    logger.info(f"Initial candidates 2: {len(li2)}")
-
-    li2 = sorted(li2, key=lambda x: x[3])[: N_good * k]
-    if len(li2) == 0:
-        logger.info("No valid candidates found.")
-        return np.array([]), 1
-    else:
-        logger.info(f"Sorted candidates 2: {len(li2):<2}, max pairs length: {len(li2[0][1])}")
-
-    # remove duplicates
-    matches_list, _, _, costs = zip(*li2)
-    tmp = np.array(matches_list).sum(axis=1)
-    fingerprints = tmp[:, 0] + 1 / (tmp[:, 1] + 1) + np.array(costs)
-    _, idx_unique = np.unique(fingerprints, return_index=True)
-    li2 = [li2[i] for i in idx_unique]
-    logger.info(f"Filtered candidates 2: {len(li2)}, max pairs length: {len(li2[0][1])}")
-
-    rlt_cost = 1
-    for i, (matches, pairs, costs, c) in enumerate(li2):
-        logger.info(f"No.{i:<2}, initial matches: {matches}, candidate pairs: {len(pairs)}, cost: {c:.3f}")
-
-        if c >= thresh_geom_ratio:
-            break
-
-        while True:
-            if len(matches) >= L:
-                break
-
-            # update with dynamic programming, Cost(m, matches) = max{ Cost(m, matches[:-1]), Cost(m, matches[-1]) }
-            costs = np.maximum(costs, cost([matches[-1]], pairs, Me11, Me22))  # (n, )
-
-            # filter with geometric cost
-            flags = costs < thresh_geom_ratio
-            pairs = pairs[flags]
-            costs = costs[flags]
-
-            if len(pairs) == 0:
-                break
-
-            # filter with flip-over test
-            flags = ~flipover(matches, pairs, pts1, pts2)  # (n, )
-            pairs_ = pairs[flags]
-            costs_ = costs[flags]
-
-            if len(pairs_) == 0:
-                break
-
-            # get the best match
-            best = np.argmin(costs_)
-            c = max(c, costs_[best])
-            matches.append(tuple(pairs_[best]))
-
-        logger.info(f"No.{i:<2}, final matches ({len(matches):<2}): {matches}, cost: {c:.3f}")
-
-        if len(matches) > len(rlt) or (len(matches) == len(rlt) and c < rlt_cost):
-            rlt = matches
-            rlt_cost = c
-
-        if len(rlt) >= L:
-            break
-
-    logger.info(f"Final matches ({len(rlt):<2}): {rlt}, cost: {rlt_cost:.3f}")
-    return np.asarray(rlt), rlt_cost
+    import gmatch_cpp
+    matches, cost = gmatch_cpp.gmatch_search_bnb(pts1, pts2, Mf12, thresh_feat, L, N_good, thresh_geom_ratio, thresh_geom_abs, thresh_flip)
+    # print(f"gmatch_cpp: found {len(matches)} matches, cost {cost:.3f}")
+    # print(f"matches: {matches}")
+    return np.array(matches), cost
 
 
 def ransac_search(pts1, pts2, Mf12):
@@ -333,10 +225,12 @@ def Match(match_data: util.MatchData, cache_id=None, debug=-1):
     global detector, CACHE
     assert len(match_data.imgs_src) > 0, "imgs_src is empty"
     """ load from match_data """
+    t0 = time.time()
     imgs_src, clds_src, masks_src = match_data.imgs_src, match_data.clds_src, match_data.masks_src
     img_dst, cld_dst, mask_dst = match_data.img_dst, match_data.cld_dst, match_data.mask_dst
 
     kp_dst, feat_dst = detector.detectAndCompute(img_dst, mask_dst)  # 0.3s for 1920x1080 => 0.014s for 211x200
+    dt1 = time.time() - t0
 
     if len(kp_dst) == 0:
         print("No keypoints found in img2")
@@ -355,8 +249,10 @@ def Match(match_data: util.MatchData, cache_id=None, debug=-1):
     """ extract the keypoints and features with descriptor """
     matches_list = []
     uvs_src = []
+    dt2, dt3, dt4 = 0, 0, 0
     for i, (img_src, cld_src, mask_src) in enumerate(zip(imgs_src, clds_src, masks_src)):
-        if cache_id in CACHE:
+        t0 = time.time()
+        if (cache_id, i) in CACHE:
             uv_src, feat_src = CACHE[(cache_id, i)]
         else:
             kp_src, feat_src = detector.detectAndCompute(img_src, mask_src)
@@ -379,18 +275,23 @@ def Match(match_data: util.MatchData, cache_id=None, debug=-1):
             continue
         pts_src = cld_src[uv_src[:, 1], uv_src[:, 0]]
         uvs_src.append(uv_src)
+        dt2 += time.time() - t0
 
         """ Feature Distance Matrix (for visual similarity) """
+        t0 = time.time()
         Mf12 = feat_mat(feat_src, feat_dst)
+        dt3 += time.time() - t0
 
         """ <Tune>
             N1 and N2: plot to see whether keypoints are enough
             thresh_feat: find a suitable threshold for feature distance
         """
+        t0 = time.time()
         if debug > 1:
             util.plot_keypoints(img_src, img_dst, uv_src, uv_dst, Mf12, thresh_feat)
         matches, cost = gmatch_search_bnb(pts_src, pts_dst, Mf12)
         matches_list.append((matches, cost))
+        dt4 += time.time() - t0
 
         """ visualization """
         if debug > 0:
@@ -415,3 +316,5 @@ def Match(match_data: util.MatchData, cache_id=None, debug=-1):
         uv_src = uvs_src[match_data.idx_best]
         matches = matches_list[match_data.idx_best][0]
         util.plot_matches(img_src, img_dst, uv_src[matches[:, 0]], uv_dst[matches[:, 1]])
+
+    return dt1, dt2, dt3, dt4

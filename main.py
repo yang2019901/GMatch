@@ -21,9 +21,9 @@ logger.propagate = False
 
 
 def render(meta_data):
-    """render model to snapshots and save to pt_path"""
+    # render model to snapshots and save to pt_path
     mesh = util.load_ply(meta_data.model_path)
-    """ <Check Unit> calc diameter of the model to compare with 'models/models_info.json' """
+    # <Check Unit> calc diameter of the model to compare with 'models/models_info.json'
     pts = np.asarray(mesh.vertices)
     bbox = (np.max(pts, axis=0) - np.min(pts, axis=0)) * 1000
     # axis_mesh = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
@@ -227,10 +227,11 @@ def run_ycbv_targets(dataset_name, scenes, debug, icp_refine):
             meta_data.init(pt_id=pt_id, scene_id=scene_id, img_id=img_id, mask_id=mask_id)
             load(meta_data, match_data)
 
+            dt1, dt2, dt3, dt4 = gmatch.Match(match_data, cache_id=meta_data.pt_id, debug=debug)
             t0 = time.time()
-            gmatch.Match(match_data, cache_id=meta_data.pt_id, debug=debug)
             solve(match_data, icp_refine=icp_refine)
-            dt = time.time() - t0
+            dt5 = time.time() - t0
+            dt = dt1 + dt2 + dt3 + dt4 + dt5
 
             M_pred = match_data.mat_m2c
 
@@ -246,10 +247,10 @@ def run_ycbv_targets(dataset_name, scenes, debug, icp_refine):
             logger.info(
                 f"img_id: {meta_data.img_id:>3}, len: {len(match_data.matches_list[match_data.idx_best]):>3}, dist_err: {dist_err*1000:>5.1f} mm, ang_err: {np.rad2deg(ang_err):>5.1f} deg, dt: {dt*1000:.0f} ms"
             )
-            result.append(f"{meta_data.img_id}, {dist_err*1000:.1f}, {np.rad2deg(ang_err):.1f}, {dt*1000:.1f}\n")
+            result.append(f"{meta_data.img_id}, {dt1:.3f}, {dt2:.3f}, {dt3:.3f}, {dt4:.3f}, {dt5:.3f}, {dist_err*1000:.1f}, {np.rad2deg(ang_err):.1f}\n")
 
-        # with open(f"result_ycbv_{scene_id}_{pt_id}.csv", "w") as f:
-        #     f.writelines(result)
+        with open(f"result_ycbv_{scene_id}_{pt_id}.csv", "w") as f:
+            f.writelines(result)
 
 
 def run_per_object(dataset_name, scene_id, img_id, obj_id, mask_id, debug):
@@ -267,9 +268,8 @@ def run_per_object(dataset_name, scene_id, img_id, obj_id, mask_id, debug):
 
 
 if __name__ == "__main__":
-    # run_per_object("ycbv", 56, 1, 1, 0, debug=0)
-    # run_per_object("hope", 3, 0, 9, 6, debug=2)
-    run_ycbv_targets("ycbv", [(48, 14, 2)], debug=0, icp_refine=True)
-    # run_per_dataset("hope", "./targets_manual_label.json", f"sift{gmatch.thresh_feat}-gmatch{gmatch.thresh_geom_ratio}_hope.csv")
+    # run_per_object("ycbv", 54, 22, 2, 0, debug=0)
+    # run_per_object("hope", 2, 0, 27, 16, debug=0)
+    run_ycbv_targets("ycbv", [(54, 2, 0)], debug=-1, icp_refine=True)
+    # run_per_dataset("hope", "./targets_manual_label.json", f"sift{gmatch.thresh_feat}-ransac_hope.csv")
     # run_per_dataset("ycbv", "./bop_data/ycbv/test_targets_bop19.json", f"sift{gmatch.thresh_feat}-gmatch{gmatch.thresh_geom_ratio}_ycbv-test.csv")
-    # run_per_dataset("ycbv", "./bop_data/ycbv/test_targets_bop19.json", f"rootsift{gmatch.thresh_feat}-teaserpp_ycbv-test.csv")
