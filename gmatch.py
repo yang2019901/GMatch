@@ -156,8 +156,6 @@ def gmatch_search_bnb(pts1, pts2, Mf12):
     """Branch-and-Bound search with geometric constraints (distance matrix and flip-over removal)"""
     import gmatch_cpp
     matches, cost = gmatch_cpp.gmatch_search_bnb(pts1, pts2, Mf12, thresh_feat, L, N_good, thresh_geom_ratio, thresh_geom_abs, thresh_flip)
-    # print(f"gmatch_cpp: found {len(matches)} matches, cost {cost:.3f}")
-    # print(f"matches: {matches}")
     return np.array(matches), cost
 
 

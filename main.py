@@ -227,7 +227,7 @@ def run_ycbv_targets(dataset_name, scenes, debug, icp_refine):
             meta_data.init(pt_id=pt_id, scene_id=scene_id, img_id=img_id, mask_id=mask_id)
             load(meta_data, match_data)
 
-            dt1, dt2, dt3, dt4 = gmatch.Match(match_data, cache_id=meta_data.pt_id, debug=debug)
+            dt1, dt2, dt3, dt4 = gmatch.Match(match_data, cache_id=None, debug=debug)
             t0 = time.time()
             solve(match_data, icp_refine=icp_refine)
             dt5 = time.time() - t0
@@ -247,6 +247,7 @@ def run_ycbv_targets(dataset_name, scenes, debug, icp_refine):
             logger.info(
                 f"img_id: {meta_data.img_id:>3}, len: {len(match_data.matches_list[match_data.idx_best]):>3}, dist_err: {dist_err*1000:>5.1f} mm, ang_err: {np.rad2deg(ang_err):>5.1f} deg, dt: {dt*1000:.0f} ms"
             )
+            logger.info(f"dst: {dt1:.3f}, src: {dt2:.3f}, feat_mat: {dt3:.3f}, bnb: {dt4:.3f}, icp: {dt5:.3f}")
             result.append(f"{meta_data.img_id}, {dt1:.3f}, {dt2:.3f}, {dt3:.3f}, {dt4:.3f}, {dt5:.3f}, {dist_err*1000:.1f}, {np.rad2deg(ang_err):.1f}\n")
 
         with open(f"result_ycbv_{scene_id}_{pt_id}.csv", "w") as f:
@@ -270,6 +271,7 @@ def run_per_object(dataset_name, scene_id, img_id, obj_id, mask_id, debug):
 if __name__ == "__main__":
     # run_per_object("ycbv", 54, 22, 2, 0, debug=0)
     # run_per_object("hope", 2, 0, 27, 16, debug=0)
-    run_ycbv_targets("ycbv", [(54, 2, 0)], debug=-1, icp_refine=True)
+    # run_ycbv_targets("ycbv", [(57, 18, 2), (58, 8, 2), (50, 2, 0), (49, 3, 0), (48, 1, 0)], debug=-1, icp_refine=True)
+    run_ycbv_targets("ycbv", [(57, 18, 2)], debug=-1, icp_refine=True)
     # run_per_dataset("hope", "./targets_manual_label.json", f"sift{gmatch.thresh_feat}-ransac_hope.csv")
     # run_per_dataset("ycbv", "./bop_data/ycbv/test_targets_bop19.json", f"sift{gmatch.thresh_feat}-gmatch{gmatch.thresh_geom_ratio}_ycbv-test.csv")

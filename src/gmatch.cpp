@@ -114,7 +114,7 @@ std::vector<bool> flipover(
  * @param pts2: target points, (n2, 3), float
  * @param Mf12: feature distance matrix between pts1 and pts2, (n1, n2), float
  * @param thresh_feat: threshold for feature distance
- * @param L: max length of matches to be found
+ * @param L: max length of matches to be found, -1 to not limit
  * @param N_good: number of good initial pairs at branch-and-bound beginning
  * @param thresh_geom_ratio: threshold for geometric distance ratio
  * @param thresh_geom_abs: threshold for geometric distance absolute error
@@ -260,8 +260,8 @@ std::pair<std::vector<std::pair<int, int>>, float> gmatch_search_bnb(
     for (auto& [matches, pairs, costs, c] : li2) {
         if (c >= thresh_geom_ratio) continue;
 
-        while (matches.size() < L) {
-            // 更新 cost
+        while (matches.size() != L) {
+            // update cost
             auto new_costs = cost({ matches.back() }, pairs, Me11, Me22, thresh_geom_abs);
             std::vector<std::pair<int, int>> new_pairs;
 
@@ -278,7 +278,7 @@ std::pair<std::vector<std::pair<int, int>>, float> gmatch_search_bnb(
             pairs = new_pairs;
             costs = new_costs_dp;
 
-            // flip-over 检查
+            // flip-over check
             auto flip_flags = flipover(matches, pairs, pts1, pts2, thresh_flip);
 
             std::vector<std::pair<int, int>> filtered_pairs;
@@ -293,11 +293,9 @@ std::pair<std::vector<std::pair<int, int>>, float> gmatch_search_bnb(
             if (filtered_pairs.empty()) break;
 
             size_t best_idx = 0;
-            for (size_t i = 1; i < filtered_pairs.size(); ++i) {
-                if (filtered_costs[i] < filtered_costs[best_idx]) {
+            for (size_t i = 1; i < filtered_pairs.size(); ++i)
+                if (filtered_costs[i] < filtered_costs[best_idx])
                     best_idx = i;
-                }
-            }
 
             matches.push_back(filtered_pairs[best_idx]);
             c = std::max(c, filtered_costs[best_idx]);
@@ -309,7 +307,8 @@ std::pair<std::vector<std::pair<int, int>>, float> gmatch_search_bnb(
             best_cost = c;
         }
 
-        if (best_matches.size() >= L) break;
+        // early stop if reach max length
+        if (best_matches.size() == L) break;
     }
 
     return { best_matches, best_cost };
