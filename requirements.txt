@@ -1,0 +1,5 @@
+numpy
+matplotlib
+opencv-python=4.11.0.86
+open3d
+scikit-learn
