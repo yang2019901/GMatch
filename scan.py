@@ -6,7 +6,7 @@ import os.path as osp
 import os, sys
 import matplotlib.pyplot as plt
 
-import gmatch, util
+import gmatch
 
 
 H, W = 480, 640
@@ -73,12 +73,12 @@ def calibrate(records):
     imgs_src = [records[0][0]]
     clds_src = [records[0][1]]
     masks_src = [None]
-    poses_src = [util.mat2pose(np.eye(4))]
+    poses_src = [gmatch.util.mat2pose(np.eye(4))]
 
     ## calibrate poses one by one
     for img_dst, cld_dst in records[1:]:
         mask_dst = None
-        match_data = util.MatchData(
+        match_data = gmatch.util.MatchData(
             imgs_src=imgs_src,
             clds_src=clds_src,
             masks_src=masks_src,
@@ -96,12 +96,12 @@ def calibrate(records):
         print(f"Match with frame No.{idx}: {t1 - t0:.3f} seconds. Best cost {cost_list[idx]:.3f}")
         if cost_list[idx] >= 1:
             continue
-        util.Solve(match_data)
+        gmatch.util.Solve(match_data)
         ## update the source data
         imgs_src.append(img_dst)
         clds_src.append(cld_dst)
         masks_src.append(mask_dst)
-        poses_src.append(util.mat2pose(np.linalg.inv(match_data.mat_m2c)))
+        poses_src.append(gmatch.util.mat2pose(np.linalg.inv(match_data.mat_m2c)))
     return imgs_src, clds_src, masks_src, poses_src
 
 
@@ -155,7 +155,7 @@ if __name__ == "__main__":
     records = pickle.load(open(raw_file, "rb"))
 
     rgbs, clds, masks, poses = calibrate(records)
-    M_list = [util.pose2mat(pose) for pose in poses]
+    M_list = [gmatch.util.pose2mat(pose) for pose in poses]
 
     D_near, D_far = 0.1, 2.0
     masks = [np.where((cld[..., 2] > D_near) & (cld[..., 2] < D_far), 255, 0).astype(np.uint8) for cld in clds]

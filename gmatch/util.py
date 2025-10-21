@@ -44,7 +44,15 @@ class MatchData:
 
 
 def Solve(match_data: MatchData):
-    """Solve correspondence with the best match in match_data."""
+    """Solve correspondence from the best match in match_data. Kabsch method is used.
+
+    Note: `match_data.mat_m2c` will be written in place.
+
+    Args:
+        match_data: util.MatchData, see util.py for details.
+    Returns:
+        None, the result is stored in `match_data.mat_m2c`.
+    """
 
     ii = match_data.idx_best
     matches = match_data.matches_list[ii]
@@ -88,6 +96,8 @@ def Refine(match_data: MatchData, voxel_size=0.01):
     Args:
         match_data: util.MatchData, see util.py for details.
         voxel_size: float, the voxel size for downsampling point cloud. unit: meter. Smaller value makes the refinement more accurate but slower.
+    Returns:
+        None, the result is stored in `match_data.mat_m2c`.
     """
 
     # alias for src and dst data
@@ -165,7 +175,6 @@ def get_snapshots(mesh):
 
     Args:
         mesh: o3d.geometry.TriangleMesh
-
     Returns:
         snapshots: [(rgb, cld, mask, M_ex), ...]
 
@@ -229,6 +238,8 @@ def save_snapshots(snapshots, path) -> None:
     Args:
         snapshots: [(rgb, cld, mask, M_ex), ...]
         path: str, the file path to save the snapshots.
+    Returns:
+        None
 
     - imgs: (N, H, W, 3), 0~255, uint8
     - clds: (N, H, W, 3), meters, float32
@@ -250,6 +261,8 @@ def vis_snapshots(snapshots) -> None:
 
     Args:
         snapshots: [(rgb, cld, mask, M_ex), ...]
+    Returns:
+        None
 
     - rgb: (H, W, 3), 0~1 or 0~255
     - cld: (H, W, 3), meters
@@ -275,7 +288,7 @@ def vis_snapshots(snapshots) -> None:
     o3d.visualization.draw_geometries(clds)
 
 
-def plot_matches(img1, img2, uv1, uv2, show_immediate=True):
+def plot_matches(img1, img2, uv1, uv2, show_immediate=True) -> None:
     """Plot matches between two images.
 
     Args:
@@ -284,7 +297,8 @@ def plot_matches(img1, img2, uv1, uv2, show_immediate=True):
         uv1: (n, 2), matched keypoints in img1, int
         uv2: (n, 2), matched keypoints in img2, int
         show_immediate: bool, whether to show the plot immediately
-
+    Returns:
+        None
     """
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
     ax1.imshow(img1)
@@ -324,6 +338,8 @@ def plot_keypoints(img1, img2, uv1, uv2, Mf12, thresh_feat, show_immediate=True)
         Mf12: (n1, n2), feature distance matrix between uv1 and uv2
         thresh_feat: float, threshold for feature distance to determine locally matched keypoints
         show_immediate: bool, whether to show the plot immediately
+    Returns:
+        None
     """
     idx1 = -1  # index of selected keypoint in img1
     alts = []  # indices of locally matched keypoints in img2

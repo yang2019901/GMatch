@@ -6,9 +6,7 @@ import cv2
 import time, logging
 import sys, os
 
-sys.path.append(os.path.dirname(__file__))
-import gmatch_cpp
-import util
+from . import gmatch_cpp, util
 
 
 logger = logging.getLogger(__file__)
@@ -60,20 +58,49 @@ def sift_mat(feat1, feat2, rootsift):
     return Mf
 
 
-def gmatch_search(pts1, pts2, Mf12):
+def SIFT_detect(img, mask):
+    """Extract keypoints and SIFT features from the image.
+
+    Args:
+        img: (H, W, 3), uint8
+        mask: (H, W), uint8
+    Returns:
+        uv: (n, 2), int32
+        feat: (n, 128), float32
+    """
+    global detector
+
+    _dim = 128 # SIFT feature dimension
+    _type = np.float32 # SIFT feature type
+
+    # extract the keypoints and features with sift descriptor
+    kp, feat = detector.detectAndCompute(img, mask)
+
+    if len(kp) == 0:
+        uv = np.zeros((0, 2), dtype=np.int32)
+        feat = np.zeros((0, _dim), dtype=_type)
+    else:
+        uv = np.array([k.pt for k in kp], dtype=np.int32).reshape(-1, 2) # shepe: (n2, 2), int32
+        # remove duplicated keypoints
+        uv, ind = np.unique(uv, axis=0, return_index=True)
+        feat = feat[ind]
+    return uv, feat
+
+
+def search(pts1, pts2, Mf12):
     """Branch-and-Bound search with geometric constraints (distance matrix and flip-over removal)
+
     Args:
         pts1: (n1, 3), float32
         pts2: (n2, 3), float32
         Mf12: (n1, n2), feature distance matrix; float32 for SIFT
-
     Returns:
         (matches, cost): matches is (d, 2), int32; cost is float32 in [0, 1] where 1 means no matches found.
     """
     matches, cost = gmatch_cpp.gmatch_search_bnb(
         pts1, pts2, Mf12, thresh_feat, L, N_good, thresh_geom_ratio, thresh_geom_abs, thresh_flip
     )
-    return np.array(matches), cost
+    return np.reshape(matches, (-1, 2)).astype(np.int32), cost
 
 
 def Match(match_data: util.MatchData, cache_id=None, debug=-1):
@@ -85,12 +112,13 @@ def Match(match_data: util.MatchData, cache_id=None, debug=-1):
         match_data: util.MatchData, see util.py for details.
         cache_id: any immutable, optional. if provided, the keypoints and features for the source image will be cached with `cache_id`.
         debug: -1, 0, 1, 2, bigger value means more debug info and -1 means none
-
     Returns:
         None, the result is stored in `match_data`.
     """
-    global detector, CACHE
+    global CACHE
     assert len(match_data.imgs_src) > 0, "imgs_src is empty"
+
+    EMPTY_MATCHES = np.zeros((0, 2), dtype=np.int32)
 
     # imgs_src: (N, H, W, 3); clds_src: (N, H, W, 3); masks_src: (N, H, W); can be list
     imgs_src, clds_src, masks_src = (
@@ -105,20 +133,9 @@ def Match(match_data: util.MatchData, cache_id=None, debug=-1):
         match_data.mask_dst,
     )
 
-    # extract the keypoints and features with descriptor
-    kp_dst, feat_dst = detector.detectAndCompute(img_dst, mask_dst)
-    if len(kp_dst) == 0:
-        logger.error("No keypoints found in img_dst (aka, scene image).")
-        match_data.matches_list = [[]]
-        match_data.cost_list = [1]
-        match_data.uvs_src = []
-        match_data.uv_dst = None
-        match_data.idx_best = 0
-        return
-    uv_dst = np.array([k.pt for k in kp_dst], dtype=np.int32)
-    # remove duplicated keypoints
-    uv_dst, ind = np.unique(uv_dst, axis=0, return_index=True)
-    feat_dst = feat_dst[ind]
+    # extract destination keypoints and features
+    uv_dst, feat_dst = SIFT_detect(img_dst, mask_dst)
+
     # filter out points with invalid depth
     mask = cld_dst[uv_dst[:, 1], uv_dst[:, 0], 2] > 1e-3
     uv_dst = uv_dst[mask]
@@ -131,25 +148,17 @@ def Match(match_data: util.MatchData, cache_id=None, debug=-1):
         if (cache_id, i) in CACHE:
             uv_src, feat_src = CACHE[(cache_id, i)]
         else:
-            kp_src, feat_src = detector.detectAndCompute(img_src, mask_src)
-            if len(kp_src) == 0:
-                uv_src = np.zeros((0, 2), dtype=np.int32)
-                feat_src = np.zeros((0, detector.descriptorSize()), dtype=bool)
-            else:
-                uv_src = np.array([k.pt for k in kp_src], dtype=np.int32)
-                # remove duplicated keypoints
-                uv_src, ind = np.unique(uv_src, axis=0, return_index=True)
-                feat_src = feat_src[ind]
-                # filter out points with invalid depth
-                mask = cld_src[uv_src[:, 1], uv_src[:, 0], 2] > 1e-3
-                uv_src = uv_src[mask]
-                feat_src = feat_src[mask]
+            # extract source keypoints and features
+            uv_src, feat_src = SIFT_detect(img_src, mask_src)
+
+            # filter out points with invalid depth
+            mask = cld_src[uv_src[:, 1], uv_src[:, 0], 2] > 1e-3
+            uv_src = uv_src[mask]
+            feat_src = feat_src[mask]
+
             if cache_id is not None:
                 CACHE[(cache_id, i)] = (uv_src, feat_src)
 
-        if len(uv_src) == 0:
-            matches_list.append(([], 1))
-            continue
         pts_src = cld_src[uv_src[:, 1], uv_src[:, 0]]
         uvs_src.append(uv_src)
 
@@ -159,7 +168,7 @@ def Match(match_data: util.MatchData, cache_id=None, debug=-1):
         if debug >= 2:
             util.plot_keypoints(img_src, img_dst, uv_src, uv_dst, Mf12, thresh_feat)
 
-        matches, cost = gmatch_search(pts_src, pts_dst, Mf12)
+        matches, cost = search(pts_src, pts_dst, Mf12)
         matches_list.append((matches, cost))
 
         # visualization
