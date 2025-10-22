@@ -70,14 +70,36 @@ def calibrate(records):
         return
 
     ## use the first record as the base coordinate system
-    imgs_src = [records[0][0]]
-    clds_src = [records[0][1]]
-    masks_src = [None]
-    poses_src = [gmatch.util.mat2pose(np.eye(4))]
+    imgs_src = []
+    clds_src = []
+    masks_src = []
+    poses_src = []
 
     ## calibrate poses one by one
-    for img_dst, cld_dst in records[1:]:
-        mask_dst = None
+    for i, (img_dst, cld_dst) in enumerate(records):
+        cv2.imshow(f"No.{i+1}/{len(records)} RGB", cv2.cvtColor(img_dst, cv2.COLOR_RGB2BGR))
+        cv2.waitKey(0)
+        line = input("bbox mask? format: r1 c1 r2 c2. Enter to skip > ")
+        line = [int(x) for x in line.strip().split()]
+        if len(line) == 4:
+            r1, c1, r2, c2 = line
+            mask_dst = np.zeros((H, W), dtype=np.uint8)
+            mask_dst[r1:r2, c1:c2] = 255
+            cv2.imshow(
+                f"No.{i+1}/{len(records)} RGB",
+                cv2.cvtColor(img_dst * (mask_dst.reshape(H, W, 1) > 0), cv2.COLOR_RGB2BGR),
+            )
+            cv2.waitKey(0)
+        else:
+            mask_dst = None
+
+        if i == 0:
+            imgs_src.append(img_dst)
+            clds_src.append(cld_dst)
+            masks_src.append(mask_dst)
+            poses_src.append(gmatch.util.mat2pose(np.eye(4)))
+            continue
+
         match_data = gmatch.util.MatchData(
             imgs_src=imgs_src,
             clds_src=clds_src,
@@ -89,7 +111,7 @@ def calibrate(records):
         )
         t0 = time.time()
         global obj_name
-        gmatch.Match(match_data, cache_id=obj_name)
+        gmatch.Match(match_data, cache_id=obj_name, debug=2)
         t1 = time.time()
         idx = match_data.idx_best
         cost_list = match_data.cost_list
@@ -143,9 +165,9 @@ def visualize_point_clouds_with_toggle(point_clouds):
 
 
 if __name__ == "__main__":
-    cache_folder = './cache'
+    cache_folder = "./cache"
     os.makedirs(cache_folder, exist_ok=True)
-    obj_name = sys.argv[1] if len(sys.argv) > 1 else 'default_object'
+    obj_name = sys.argv[1] if len(sys.argv) > 1 else "default_object"
     raw_file = osp.join(cache_folder, f"{obj_name}_raw.pkl")
     model_file = osp.join(cache_folder, f"{obj_name}.pt")
 
