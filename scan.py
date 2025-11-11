@@ -11,6 +11,103 @@ import gmatch
 
 H, W = 480, 640
 
+import cv2
+import numpy as np
+
+
+class BBoxAnnotator:
+    """
+    A helper class to annotate a bounding box on an image using mouse events.
+    - Left-click and drag to draw a rectangle.
+    - Press 'r' to reset the current drawing.
+    - Press 'q' or 'Esc' to quit and return current box (if any).
+    - All other keys are ignored (no action).
+    """
+
+    def __init__(self, img):
+        """
+        Initialize with an input image (BGR format, as displayed by OpenCV).
+        
+        Args:
+            img (np.ndarray): Input image (H x W x 3), uint8, BGR.
+        """
+        self.img = img.copy()          # Current display image (may show temporary rectangle)
+        self.img_bk = img.copy()        # Original image (for reset)
+        self.drawing = False           # Flag to indicate if user is drawing
+        self.start_point = None        # Starting point (x, y) of rectangle
+        self.end_point = None          # Current end point (x, y) during drag
+        self.bbox = None               # Final bbox as (r1, c1, r2, c2) = (y1, x1, y2, x2)
+
+    def mouse_callback(self, event, x, y, flags, param):
+        """
+        Mouse callback function for OpenCV window.
+        Handles drawing logic on mouse events.
+        """
+        if event == cv2.EVENT_LBUTTONDOWN:
+            # Start drawing
+            self.drawing = True
+            self.start_point = (x, y)
+            self.end_point = (x, y)
+
+        elif event == cv2.EVENT_MOUSEMOVE:
+            # Update rectangle while dragging
+            if self.drawing:
+                self.end_point = (x, y)
+                # Restore original image and redraw current rectangle
+                self.img = self.img_bk.copy()
+                cv2.rectangle(self.img, self.start_point, self.end_point, (0, 255, 0), 2)
+
+        elif event == cv2.EVENT_LBUTTONUP:
+            # Finish drawing
+            self.drawing = False
+            self.end_point = (x, y)
+            
+            # Normalize to (top-left, bottom-right)
+            x1, y1 = self.start_point
+            x2, y2 = self.end_point
+            c1, c2 = min(x1, x2), max(x1, x2)  # column indices (x)
+            r1, r2 = min(y1, y2), max(y1, y2)  # row indices (y)
+            self.bbox = (r1, c1, r2, c2)
+
+            # Draw final rectangle
+            self.img = self.img_bk.copy()
+            cv2.rectangle(self.img, (c1, r1), (c2, r2), (0, 255, 0), 2)
+
+    def annotate(self, window_name):
+        """
+        Launch an interactive window for bounding box annotation.
+
+        Args:
+            window_name (str): Name of the OpenCV window.
+
+        Returns:
+            tuple or None: Bounding box as (r1, c1, r2, c2) if confirmed,
+                           or None if user pressed 'q' or 'Esc'.
+        """
+        self.window_name = window_name
+        cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
+        cv2.imshow(window_name, self.img)
+        cv2.setMouseCallback(window_name, self.mouse_callback)
+
+        print("Draw a bounding box by dragging with the left mouse button.")
+        print("Press 'r' to reset the box, 'q' or 'Esc' to skip.")
+
+        while True:
+            cv2.imshow(window_name, self.img)
+            key = cv2.waitKey(100) & 0xFF  # Wait 100ms to keep GUI responsive
+
+            if key == ord('r') or key == ord('R'):
+                # Reset the drawing
+                self.img = self.img_bk.copy()
+                self.bbox = None
+                print("Bounding box reset.")
+
+            elif key == ord('q') or key == ord('Q') or key == 27:  # 27 = Esc
+                break
+
+        cv2.destroyAllWindows()
+        return self.bbox
+
 
 def record(output_file):
     pipeline = rs.pipeline()
@@ -77,21 +174,26 @@ def calibrate(records):
 
     ## calibrate poses one by one
     for i, (img_dst, cld_dst) in enumerate(records):
-        cv2.imshow(f"No.{i+1}/{len(records)} RGB", cv2.cvtColor(img_dst, cv2.COLOR_RGB2BGR))
-        cv2.waitKey(0)
-        line = input("bbox mask? format: r1 c1 r2 c2. Enter to skip > ")
-        line = [int(x) for x in line.strip().split()]
-        if len(line) == 4:
-            r1, c1, r2, c2 = line
+        window_name = f"No.{i+1}/{len(records)} RGB"
+        img_bgr = cv2.cvtColor(img_dst, cv2.COLOR_RGB2BGR)  # Convert to BGR for OpenCV
+    
+        annotator = BBoxAnnotator(img_bgr)
+        bbox = annotator.annotate(window_name)  # Returns (r1, c1, r2, c2) or None
+
+        if bbox is not None:
+            r1, c1, r2, c2 = bbox
             mask_dst = np.zeros((H, W), dtype=np.uint8)
             mask_dst[r1:r2, c1:c2] = 255
-            cv2.imshow(
-                f"No.{i+1}/{len(records)} RGB",
-                cv2.cvtColor(img_dst * (mask_dst.reshape(H, W, 1) > 0), cv2.COLOR_RGB2BGR),
-            )
+        
+            # Optional: Show masked image
+            masked_rgb = img_dst * (mask_dst[:, :, None] > 0)
+            cv2.imshow(window_name, cv2.cvtColor(masked_rgb, cv2.COLOR_RGB2BGR))
+            print(f"Annotated bbox: r1={r1}, c1={c1}, r2={r2}, c2={c2}")
             cv2.waitKey(0)
+            cv2.destroyAllWindows()
         else:
-            mask_dst = None
+            print("No bounding box selected. Using depth-based mask.")
+            mask_dst = np.where((cld_dst[:, :, 2] > 1e-2), 255, 0).astype(np.uint8)
 
         if i == 0:
             imgs_src.append(img_dst)
@@ -178,9 +280,6 @@ if __name__ == "__main__":
 
     rgbs, clds, masks, poses = calibrate(records)
     M_list = [gmatch.util.pose2mat(pose) for pose in poses]
-
-    D_near, D_far = 0.1, 2.0
-    masks = [np.where((cld[..., 2] > D_near) & (cld[..., 2] < D_far), 255, 0).astype(np.uint8) for cld in clds]
 
     snapshots = list(zip(rgbs, clds, masks, M_list))
     with open(model_file, "wb") as f:
