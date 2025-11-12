@@ -5,6 +5,7 @@ import open3d as o3d
 import os.path as osp
 import os, sys
 import matplotlib.pyplot as plt
+import argparse
 
 import gmatch
 
@@ -43,6 +44,8 @@ class BBoxAnnotator:
         Mouse callback function for OpenCV window.
         Handles drawing logic on mouse events.
         """
+        x = np.clip(x, 0, W)
+        y = np.clip(y, 0, H)
         if event == cv2.EVENT_LBUTTONDOWN:
             # Start drawing
             self.drawing = True
@@ -109,7 +112,7 @@ class BBoxAnnotator:
         return self.bbox
 
 
-def record(output_file):
+def record(path_save):
     pipeline = rs.pipeline()
     config = rs.config()
     config.enable_stream(rs.stream.depth, W, H, rs.format.z16, 30)
@@ -158,7 +161,7 @@ def record(output_file):
         print("No records captured.")
         return
 
-    with open(output_file, "wb") as f:
+    with open(path_save, "wb") as f:
         pickle.dump(records, f)
 
 
@@ -267,25 +270,57 @@ def visualize_point_clouds_with_toggle(point_clouds):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="The scanner wizard to get snapshots of target object.")
+    parser.add_argument("--object_label", type=str, required=True, help="The store label of target object.")
+    parser.add_argument("--resume", action="store_true", help="resume from raw.pkl")
+    args = parser.parse_args()
+
     cache_folder = "./cache"
     os.makedirs(cache_folder, exist_ok=True)
-    obj_name = sys.argv[1] if len(sys.argv) > 1 else "default_object"
-    raw_file = osp.join(cache_folder, f"{obj_name}_raw.pkl")
-    model_file = osp.join(cache_folder, f"{obj_name}.pt")
 
-    if not osp.exists(raw_file):
-        record(raw_file)
+    obj_name = args.object_label
+    path_raw = osp.join(cache_folder, "raw.pkl")
+    path_model = osp.join(cache_folder, f"{obj_name}.pt")
 
-    records = pickle.load(open(raw_file, "rb"))
+    print(f"Env: path_raw_file={path_raw}; path_model_file={path_model}")
+
+    if not args.resume or not osp.exists(path_raw):
+        record(path_raw)
+
+    records = pickle.load(open(path_raw, "rb"))
 
     rgbs, clds, masks, poses = calibrate(records)
     M_list = [gmatch.util.pose2mat(pose) for pose in poses]
 
+    tmp = input("redraw box [y/N]?")
+    if tmp == 'y' or tmp == 'Y':
+        for i in range(len(records)):
+            window_name = f"No.{i+1}/{len(records)} RGB"
+            bgr = cv2.cvtColor(rgbs[i], cv2.COLOR_RGB2BGR)  # Convert to BGR for OpenCV
+
+            annotator = BBoxAnnotator(bgr)
+            bbox = annotator.annotate(window_name)  # Returns (r1, c1, r2, c2) or None
+
+            if bbox is not None:
+                r1, c1, r2, c2 = bbox
+                mask = np.zeros((H, W), dtype=np.uint8)
+                mask[r1:r2, c1:c2] = 255
+
+                masked_bgr = bgr * (mask[:, :, None] > 0)
+                cv2.imshow(window_name, masked_bgr)
+                print(f"Annotated bbox: r1={r1}, c1={c1}, r2={r2}, c2={c2}")
+                cv2.waitKey(0)
+                cv2.destroyAllWindows()
+            else:
+                print("No bounding box selected. Using depth-based mask.")
+                mask = np.where((clds[i][:, :, 2] > 1e-2), 255, 0).astype(np.uint8)
+            masks[i] = mask
+
     snapshots = list(zip(rgbs, clds, masks, M_list))
-    with open(model_file, "wb") as f:
+    with open(path_model, "wb") as f:
         pickle.dump(snapshots, f)
 
-    snapshots = pickle.load(open(model_file, "rb"))
+    snapshots = pickle.load(open(path_model, "rb"))
 
     pcds = []
     for rgb, cld, mask, M in snapshots:
