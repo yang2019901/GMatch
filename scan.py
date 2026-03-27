@@ -271,14 +271,14 @@ def visualize_point_clouds_with_toggle(point_clouds):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="The scanner wizard to get snapshots of target object.")
-    parser.add_argument("--object_label", type=str, required=True, help="The store label of target object.")
+    parser.add_argument("object_name", help="The store label of target object.")
     parser.add_argument("--resume", action="store_true", help="resume from raw.pkl")
     args = parser.parse_args()
 
     cache_folder = "./cache"
     os.makedirs(cache_folder, exist_ok=True)
 
-    obj_name = args.object_label
+    obj_name = args.object_name
     path_raw = osp.join(cache_folder, "raw.pkl")
     path_model = osp.join(cache_folder, f"{obj_name}.pt")
 

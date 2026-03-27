@@ -28,12 +28,12 @@ feat_mat = lambda feat1, feat2: sift_mat(feat1, feat2, rootsift=True)  # feature
 
 
 """ GMatch settings """
-N_good = 24  # number of good matches candidates
+T = 24  # T pairs with the highest feature similarity will be used to Branch-and-Bound
 L = 24  # max search length
-# threshold for geometric cost, applied to 3d distance error ratio when attempting to add `m` to matches.
+# threshold for geometric cost, applied to 3d distance error ratio when attempting to add a pair to matches.
 thresh_geom_ratio = 0.1
-# threshold for geometric cost, applied to 3d distance directly when attempting to add `m` to matches. (unit: meter)
-thresh_geom_abs = 0.005
+# threshold for geometric cost, accounts for point cloud noise
+thresh_geom_abs = 0.01
 # threshold for flipover judgement
 thresh_flip = 0.8
 
@@ -98,7 +98,7 @@ def search(pts1, pts2, Mf12):
         (matches, cost): matches is (d, 2), int32; cost is float32 in [0, 1] where 1 means no matches found.
     """
     matches, cost = gmatch_cpp.gmatch_search_bnb(
-        pts1, pts2, Mf12, thresh_feat, L, N_good, thresh_geom_ratio, thresh_geom_abs, thresh_flip
+        pts1, pts2, Mf12, thresh_feat, L, T, thresh_geom_ratio, thresh_geom_abs, thresh_flip
     )
     return np.reshape(matches, (-1, 2)).astype(np.int32), cost
 
